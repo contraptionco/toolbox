@@ -152,7 +152,7 @@ To keep your server updated automatically:
 
 The script will check for updates every minute and apply them if found.
 
-## Security: Automatic Screen Locking
+## Security: Automatic screen locking
 
 Included in the repository is a `lock_screen_on_login.app` utility that automatically locks your Mac's screen upon login. This is useful for servers configured with automatic login (to ensure services start on reboot) while still protecting physical access to the machine.
 
