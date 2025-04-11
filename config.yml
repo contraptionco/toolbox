@@ -1,0 +1,32 @@
+tunnel: f43156be-64e5-4387-b571-37d808610b29
+credentials-file: /Users/philip/.cloudflared/f43156be-64e5-4387-b571-37d808610b29.json
+ingress:
+  - hostname: toolbox-browser.contraption.co
+    service: tcp://localhost:5900
+  - hostname: toolbox-ssh.contraption.co
+    service: tcp://localhost:22
+  - hostname: www.contraption.co
+    service: http://localhost:2368
+  - hostname: contraption.co
+    service: http://localhost:2368
+  - hostname: toolbox.contraption.co
+    service: http://localhost:19999
+  - hostname: telegraph.contraption.co
+    service: http://localhost:8000
+  - hostname: write.contraption.co
+    service: http://localhost:2368
+  - hostname: postcard.contraption.co
+    service: http://localhost:3000
+  - hostname: "*.postcard.page"
+    service: http://localhost:3000
+  - hostname: postcard.page
+    service: http://localhost:3000
+  - hostname: bklt.contraption.co
+    service: http://localhost:4000
+  - hostname: "*.booklet.group"
+    service: http://localhost:4000
+  - hostname: frctnl.xyz
+    service: http://localhost:4000
+  - hostname: www.frctnl.xyz
+    service: http://localhost:4000
+  - service: http_status:404

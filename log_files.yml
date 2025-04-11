@@ -1,0 +1,6 @@
+files:
+  - /Users/philip/code/toolbox/*.log
+destination:
+  host: logsX.papertrailapp.com
+  port: 12345
+  protocol: tls
