@@ -88,7 +88,7 @@ For detailed setup instructions, follow the [official 1Password CLI guide](https
 
 ## Setting up Cloudflare Tunnel
 
-Cloudflare Tunnel provides a secure way to expose your home server to the internet without opening ports. For a detailed guide on setting up Cloudflare Tunnel on a Mac, follow [Sam Rhea's excellent guide](https://blog.samrhea.com/posts/2021/zero-trust-mac-browser/).
+Cloudflare Tunnel provides a secure way to expose your home server to the internet without opening ports. For a detailed guide on setting up Cloudflare Tunnel on a Mac, follow [Sam Rhea's excellent guide](https://web.archive.org/web/20241113053641/https://blog.samrhea.com/posts/2021/zero-trust-mac-browser/).
 
 To set up Cloudflare Tunnel for this toolbox:
 
