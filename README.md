@@ -30,6 +30,7 @@ This toolbox is built with the following principles in mind:
 - **Docker container orchestration**: Simplified management of containerized apps
 - **One-password integration**: Secure credential management
 - **Heartbeat monitoring**: Optional uptime monitoring
+- **Lock screen on boot**: Secure your server with automatic screen locking after reboot
 
 ## Requirements
 
@@ -150,6 +151,19 @@ To keep your server updated automatically:
 4. Load the LaunchAgent: `launchctl load ~/Library/LaunchAgents/co.contraption.toolbox.heartbeat.plist`
 
 The script will check for updates every minute and apply them if found.
+
+## Security: Automatic Screen Locking
+
+Included in the repository is a `lock_screen_on_login.app` utility that automatically locks your Mac's screen upon login. This is useful for servers configured with automatic login (to ensure services start on reboot) while still protecting physical access to the machine.
+
+To set up automatic screen locking:
+
+1. Add `lock_screen_on_login.app` to your Login Items:
+   - Open System Preferences/Settings → Users & Groups → Login Items
+   - Click the "+" button and select the `lock_screen_on_login.app` from the repository
+   - This ensures the screen locks immediately after automatic login
+
+This setup allows your server to reboot and start services automatically without requiring manual login, while still ensuring that anyone with physical access to the machine needs a password to use it.
 
 ## Configuring log forwarding (optional)
 
