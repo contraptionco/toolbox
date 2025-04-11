@@ -46,7 +46,7 @@ Before you start, ensure you have:
 - [1Password CLI](https://1password.com/downloads/command-line/) installed and configured
 - [Cloudflare](https://www.cloudflare.com/) account with a domain
 - [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) configured
-- (Optional) [UptimeRobot](https://uptimerobot.com/) account for monitoring
+- (Optional) [UptimeRobot](https://uptimerobot.com/?red=contra) account for monitoring
 - (Optional) [Papertrail](https://www.papertrail.com/) account for log aggregation
 
 ## Quick start
