@@ -152,6 +152,22 @@ module Config
       auto_update: true                                      # Whether to auto-update when repo changes
     },
     {
+      name: 'junk-drawer',                                          # Service name
+      repo_url: 'git@github.com:contraptionco/junk-drawer.git',     # CHANGE THIS to your repository
+      local_path: "#{CODE_DIR}/junk-drawer",                        # Where to clone the repo
+      container_config: {                                    # Container configuration after build
+        image_name: 'junk-drawer',                                  # Docker image name to create
+        ports: ['5000:3000'],                                # Port mapping (host:container)
+        environment: {                                       # Environment variables
+          DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'DATABASE_URL' },
+          SECRET_KEY_BASE: { type: '1password', item: 'junk-drawer', field: 'SECRET_KEY_BASE' },
+          RAILS_ENV: 'production'                            # Environment setting
+        },
+        cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
+      },
+      auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
       name: 'plausible',                                     # Service name
       repo_url: 'https://github.com/plausible/community-edition', # Repo URL (public repo)
       local_path: "#{DATA_DIR}/plausible/plausible-ce",      # Where to clone the repo

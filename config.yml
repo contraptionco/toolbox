@@ -29,4 +29,6 @@ ingress:
     service: http://localhost:4000
   - hostname: www.frctnl.xyz
     service: http://localhost:4000
+  - hostname: junk-drawer.contraption.co
+    service: http://localhost:5000
   - service: http_status:404
