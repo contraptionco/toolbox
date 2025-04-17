@@ -157,7 +157,7 @@ module Config
       local_path: "#{CODE_DIR}/junk-drawer",                        # Where to clone the repo
       container_config: {                                    # Container configuration after build
         image_name: 'junk-drawer',                                  # Docker image name to create
-        ports: ['5000:3000'],                                # Port mapping (host:container)
+        ports: ['4001:3000'],                                # Port mapping (host:container)
         environment: {                                       # Environment variables
           DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'DATABASE_URL' },
           SECRET_KEY_BASE: { type: '1password', item: 'junk-drawer', field: 'SECRET_KEY_BASE' },
