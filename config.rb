@@ -161,6 +161,7 @@ module Config
         environment: {                                       # Environment variables
           DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'DATABASE_URL' },
           SECRET_KEY_BASE: { type: '1password', item: 'junk-drawer', field: 'SECRET_KEY_BASE' },
+          GHOST_DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'GHOST_DATABASE_URL' },
           RAILS_ENV: 'production'                            # Environment setting
         },
         cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
