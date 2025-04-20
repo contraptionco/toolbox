@@ -17,8 +17,9 @@ module Core
       FileUtils.mkdir_p(File.dirname(local_path))
 
       # Clone the repository
-      # Clone without checking out a specific branch initially if we need to find the latest tag
-      cmd = "git clone --no-checkout #{repo_url} #{local_path}"
+      # Clone the repository normally, checking out the default branch
+      cmd = "git clone #{repo_url} #{local_path}"
+      cmd += " -b #{branch}" if branch # Add branch if specified (e.g., for Plausible)
 
       stdout, stderr, status = Open3.capture3(cmd)
       raise "Error cloning repository: #{stderr}" unless status.success?
@@ -293,19 +294,6 @@ module Core
       # Process if repo was just cloned/updated OR forced update OR does not exist yet
       # Simplified logic: if repo exists now, ensure it's set up correctly
       if repo_exists
-        # Run install command only once after initial clone
-        if install_cmd && repo_updated_or_cloned && !Dir.exist?(File.join(local_path, '.git')) # Check if it was *just* cloned
-          begin
-            run_install_command(local_path, install_cmd)
-          rescue StandardError => e
-            puts "Install command failed for #{name}: #{e.message}"
-            puts "Manual intervention may be required in #{local_path}."
-            return # Stop processing this service if install fails
-          end
-        elsif install_cmd && !repo_exists # Should have been cloned above
-            puts "Warning: repo should exist but doesn't, cannot run install_cmd for #{name}"
-        end
-
         # Handle environment file if specified (Plausible example)
         if service_config[:env_config]
           apply_env_file(local_path, service_config[:env_config])
