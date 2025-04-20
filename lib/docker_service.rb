@@ -117,6 +117,7 @@ module Core
 
       # Execute the command
       puts "Starting container: #{service_config[:name]}..."
+      puts cmd.join(" \\\n  ")
       stdout, stderr, status = Open3.capture3(cmd.join(" \\\n  "))
       raise "Error starting container #{service_config[:name]}: #{stderr}" unless status.success?
 
