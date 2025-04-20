@@ -360,11 +360,33 @@ module Core
           end
         elsif use_compose || service_config[:compose_override]
           # Manage Docker Compose services
+          compose_file_path = File.join(local_path, 'docker-compose.yml')
+
+          # Run install command if it's defined and the docker-compose.yml is missing
+          if install_cmd && !File.exist?(compose_file_path)
+            puts "Docker Compose file missing. Running install command for #{name}..."
+            begin
+              run_install_command(local_path, install_cmd)
+              # Assume install command succeeded and created the file
+            rescue StandardError => e
+              puts "Install command failed for #{name}: #{e.message}"
+              puts "Cannot proceed with Docker Compose for #{name}. Manual intervention may be required in #{local_path}."
+              return # Stop processing this service if install fails
+            end
+          end
+
           # Check if compose services are running
           compose_running = false
-          Dir.chdir(local_path) do
-              stdout, _stderr, status = Open3.capture3("docker compose ps -q")
-              compose_running = status.success? && !stdout.strip.empty?
+          # Only check if compose file exists
+          if File.exist?(compose_file_path)
+            Dir.chdir(local_path) do
+                stdout, _stderr, status = Open3.capture3("docker compose ps -q")
+                compose_running = status.success? && !stdout.strip.empty?
+            end
+          else
+              puts "Warning: docker-compose.yml not found in #{local_path} for service #{name}, cannot manage compose services."
+              # Skip compose management if file doesn't exist even after trying install_cmd
+              next # Skip to next service or end processing for this one
           end
 
           if repo_updated_or_cloned || service_config[:force_update] || !compose_running
