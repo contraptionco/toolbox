@@ -386,7 +386,7 @@ module Core
           else
               puts "Warning: docker-compose.yml not found in #{local_path} for service #{name}, cannot manage compose services."
               # Skip compose management if file doesn't exist even after trying install_cmd
-              next # Skip to next service or end processing for this one
+              return # Stop processing this specific service
           end
 
           if repo_updated_or_cloned || service_config[:force_update] || !compose_running
