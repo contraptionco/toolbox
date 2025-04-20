@@ -193,6 +193,7 @@ module Config
       repo_url: 'https://github.com/Sentry-ARM/self-hosted.git', # Sentry ARM repo URL
       local_path: "#{Config::CODE_DIR}/sentry-self-hosted",   # Local path for the repo (Changed from sentry to avoid conflict if user has another sentry folder)
       # Command to run ONCE after initial clone. Upgrades require manual intervention (run ./install.sh --upgrade).
+      branch: 'arm64',                                        # Specify the arm64 branch
       install_cmd: './install.sh --no-report-self-hosted-issues',
       # Indicates this service uses docker-compose in its directory
       use_compose: true,

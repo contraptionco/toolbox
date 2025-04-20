@@ -286,10 +286,16 @@ module Core
         repo_updated_or_cloned = true
       end
 
-      # Checkout latest release tag (relevant for Sentry pattern)
-      # Do this after clone or potentially on update if auto_update were enabled
-      latest_tag = get_latest_release_tag(repo_url)
-      checkout_tag(local_path, latest_tag)
+      # If a specific branch is configured, ensure it's checked out.
+      # Otherwise, attempt to checkout the latest release tag.
+      if branch
+        # The pull_latest/clone_repo should have already checked out the branch if specified
+        puts "Using specified branch: #{branch}"
+      else
+        # Checkout latest release tag if no specific branch is set
+        latest_tag = get_latest_release_tag(repo_url)
+        checkout_tag(local_path, latest_tag)
+      end
 
       # Process if repo was just cloned/updated OR forced update OR does not exist yet
       # Simplified logic: if repo exists now, ensure it's set up correctly
