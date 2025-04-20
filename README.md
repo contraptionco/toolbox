@@ -31,6 +31,7 @@ This toolbox is built with the following principles in mind:
 - **One-password integration**: Secure credential management
 - **Heartbeat monitoring**: Optional uptime monitoring
 - **Lock screen on boot**: Secure your server with automatic screen locking after reboot
+- **Complex Git Service Management**: Supports services requiring initial setup scripts and managed via their own Docker Compose.
 
 ## Requirements
 
@@ -136,6 +137,24 @@ DOCKER_SERVICES = [
 ]
 ```
 
+Here's an example of a service cloned from Git that runs its own install script and is managed by Docker Compose within its directory:
+
+```ruby
+GIT_SERVICES = [
+  {
+    name: 'sentry',                                         # Service name
+    repo_url: 'https://github.com/getsentry/self-hosted.git', # Sentry repo URL
+    local_path: "#{Config::CODE_DIR}/sentry-self-hosted",   # Local path for the repo
+    # Command to run ONCE after initial clone.
+    install_cmd: './install.sh --no-report-self-hosted-issues',
+    # Indicates this service uses docker-compose in its directory
+    use_compose: true,
+    # Auto-update set to false as Sentry upgrades involve install script, not just git pull
+    auto_update: false
+  }
+]
+```
+
 ## Heartbeat script (auto-updates)
 
 To keep your server updated automatically:
@@ -222,6 +241,7 @@ For apps that require custom builds:
 - Build process management
 - Deployment to containers or directories
 - Support for private repos (requires GitHub authentication)
+- Can handle complex setups involving initial installation scripts and integrated Docker Compose management.
 
 ## Customizing for your needs
 

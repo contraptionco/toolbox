@@ -204,6 +204,18 @@ module Config
       start_cmd: '/opt/homebrew/opt/netdata/sbin/netdata -D' # Command to start the service
                                                              # Cloudflare connects to port 19999 to serve:
                                                              # toolbox.contraption.co
+    },
+    # Sentry Self-Hosted (Requires manual setup first - see lib/git_service.rb modifications)
+    {
+      name: 'sentry',                                         # Service name
+      repo_url: 'https://github.com/getsentry/self-hosted.git', # Sentry repo URL
+      local_path: "#{Config::CODE_DIR}/sentry",   # Local path for the repo
+      # Command to run ONCE after initial clone. Upgrades require manual intervention (run ./install.sh --upgrade).
+      install_cmd: './install.sh --no-report-self-hosted-issues',
+      # Indicates this service uses docker-compose in its directory
+      use_compose: true,
+      # Auto-update set to false as Sentry upgrades involve install script, not just git pull
+      auto_update: false
     }
   ]
 
