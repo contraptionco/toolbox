@@ -3,6 +3,7 @@ require 'fileutils'
 require 'net/http'
 require 'uri'
 require 'json'
+require 'yaml'
 require_relative '../config'
 require_relative 'docker_service'
 require_relative 'one_password'
@@ -106,12 +107,26 @@ module Core
     end
 
     def self.apply_compose_override(local_path, override_config)
-      require 'yaml'
-
       puts "Applying docker-compose override to #{local_path}..."
 
+      # Helper function to convert keys to strings recursively
+      stringify_keys = ->(hash) do
+        hash.each_with_object({}) do |(key, value), result|
+          new_key = key.is_a?(Symbol) ? key.to_s : key
+          new_value = case value
+                      when Hash
+                        stringify_keys.call(value)
+                      when Array
+                        value.map { |item| item.is_a?(Hash) ? stringify_keys.call(item) : item }
+                      else
+                        value
+                      end
+          result[new_key] = new_value
+        end
+      end
+
       override_path = File.join(local_path, "compose.override.yml")
-      File.write(override_path, override_config.to_yaml)
+      File.write(override_path, stringify_keys.call(override_config).to_yaml)
 
       puts "Docker Compose override saved to #{override_path}."
     end
