@@ -187,19 +187,6 @@ module Config
       },
       auto_update: true                                      # Whether to auto-update when repo changes
     },
-    # Sentry Self-Hosted
-    {
-      name: 'sentry',                                         # Service name
-      repo_url: 'https://github.com/Sentry-ARM/self-hosted.git', # Sentry ARM repo URL
-      local_path: "#{Config::CODE_DIR}/sentry-self-hosted",   # Local path for the repo (Changed from sentry to avoid conflict if user has another sentry folder)
-      # Command to run ONCE after initial clone. Upgrades require manual intervention (run ./install.sh --upgrade).
-      branch: 'arm64',                                        # Specify the arm64 branch
-      install_cmd: './install.sh --no-report-self-hosted-issues',
-      # Indicates this service uses docker-compose in its directory
-      use_compose: true,
-      # Auto-update set to false as Sentry upgrades involve install script, not just git pull
-      auto_update: false
-    }
   ]
 
   #-----------------------------------------------------------------------------------
