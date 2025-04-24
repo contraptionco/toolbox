@@ -160,7 +160,6 @@ module Config
         ports: ['4001:3000'],                                # Port mapping (host:container)
         environment: {                                       # Environment variables
           DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'DATABASE_URL' },
-          GHOST_DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'GHOST_DATABASE_URL' },
           RAILS_MASTER_KEY: { type: '1password', item: 'junk-drawer', field: 'RAILS_MASTER_KEY' },
           RAILS_ENV: 'production'                            # Environment setting
         },
