@@ -160,8 +160,8 @@ module Config
         ports: ['4001:3000'],                                # Port mapping (host:container)
         environment: {                                       # Environment variables
           DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'DATABASE_URL' },
-          SECRET_KEY_BASE: { type: '1password', item: 'junk-drawer', field: 'SECRET_KEY_BASE' },
           GHOST_DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'GHOST_DATABASE_URL' },
+          RAILS_MASTER_KEY: { type: '1password', item: 'junk-drawer', field: 'RAILS_MASTER_KEY' },
           RAILS_ENV: 'production'                            # Environment setting
         },
         cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
