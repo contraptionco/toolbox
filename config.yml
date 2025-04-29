@@ -35,6 +35,4 @@ ingress:
     service: http://localhost:4001
   - hostname: infirmary.contraption.co
     service: http://localhost:9000
-  - hostname: quesogpt.contraption.co
-    service: http://localhost:3001
   - service: http_status:404
