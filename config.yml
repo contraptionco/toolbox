@@ -35,4 +35,6 @@ ingress:
     service: http://localhost:4001
   - hostname: quesogpt.contraption.co
     service: http://localhost:3001
+  - hostname: signal.contraption.co
+    service: http://localhost:8080
   - service: http_status:404

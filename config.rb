@@ -114,6 +114,16 @@ module Config
       },
       auto_update: true,                                     # Whether to auto-update when image tag changes
       depends_on: ['mysql']                                  # This container depends on MySQL
+    },
+    {
+      name: 'signal',                                    # Container name
+      image: 'bbernhard/signal-cli-rest-api:latest',         # Docker image to use
+      ports: ['8080:8080'],                                  # Port mapping (host:container)
+      volumes: ["#{DATA_DIR}/signal:/home/.local/share/signal-cli"], # Data persistence
+      environment: {                                         # Environment variables
+        MODE: 'native'
+      },
+      auto_update: true                                      # Whether to auto-update when image tag changes
     }
   ]
 
