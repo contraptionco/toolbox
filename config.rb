@@ -174,7 +174,7 @@ module Config
         environment: {                                       # Environment variables
           DATABASE_URL: { type: '1password', item: 'Postcard', field: 'DATABASE_URL' },
           RAILS_MASTER_KEY: { type: '1password', item: 'Postcard', field: 'RAILS_MASTER_KEY' },
-          ADMIN_CHAT_URL: { type: '1password', item: 'Bklt', field: 'ADMIN_CHAT_URL' },
+          ADMIN_CHAT_URL: { type: '1password', item: 'Postcard', field: 'ADMIN_CHAT_URL' },
           RAILS_ENV: 'production'                            # Environment setting
         },
         cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
