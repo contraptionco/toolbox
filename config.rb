@@ -192,7 +192,6 @@ module Config
           DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'DATABASE_URL' },
           RAILS_MASTER_KEY: { type: '1password', item: 'junk-drawer', field: 'RAILS_MASTER_KEY' },
           RAILS_ENV: 'production',                            # Environment setting
-          ADMIN_CHAT_URL: { type: '1password', item: 'junk-drawer', field: 'ADMIN_CHAT_URL' }
         },
         cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
       },
