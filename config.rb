@@ -121,7 +121,9 @@ module Config
       ports: ['8080:8080'],                                  # Port mapping (host:container)
       volumes: ["#{DATA_DIR}/signal:/home/.local/share/signal-cli"], # Data persistence
       environment: {                                         # Environment variables
-        MODE: 'native'
+        MODE: 'native',
+        SWAGGER_HOST: 'signal.contraption.co',
+        SWAGGER_USE_HTTPS_AS_PREFERRED_SCHEME: 'true'
       },
       auto_update: true                                      # Whether to auto-update when image tag changes
     }
