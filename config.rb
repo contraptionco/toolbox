@@ -165,6 +165,23 @@ module Config
       auto_update: true                                      # Whether to auto-update when repo changes
     },
     {
+      name: 'postcard',                                          # Service name
+      repo_url: 'git@github.com:contraptionco/postcard.git',     # CHANGE THIS to your repository
+      local_path: "#{CODE_DIR}/postcard",                        # Where to clone the repo
+      container_config: {                                    # Container configuration after build
+        image_name: 'postcard',                                  # Docker image name to create
+        ports: ['3000:3000'],                                # Port mapping (host:container)
+        environment: {                                       # Environment variables
+          DATABASE_URL: { type: '1password', item: 'Postcard', field: 'DATABASE_URL' },
+          RAILS_MASTER_KEY: { type: '1password', item: 'Postcard', field: 'RAILS_MASTER_KEY' },
+          ADMIN_CHAT_URL: { type: '1password', item: 'Bklt', field: 'ADMIN_CHAT_URL' },
+          RAILS_ENV: 'production'                            # Environment setting
+        },
+        cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
+      },
+      auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
       name: 'junk-drawer',                                          # Service name
       repo_url: 'git@github.com:contraptionco/junk-drawer.git',     # CHANGE THIS to your repository
       local_path: "#{CODE_DIR}/junk-drawer",                        # Where to clone the repo
