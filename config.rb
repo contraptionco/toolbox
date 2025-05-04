@@ -157,6 +157,7 @@ module Config
           RAILS_MASTER_KEY: { type: '1password', item: 'Bklt', field: 'RAILS_MASTER_KEY' },
           SECRET_KEY_BASE: { type: '1password', item: 'Bklt', field: 'SECRET_KEY_BASE' },
           SENTRY_DSN: { type: '1password', item: 'Bklt', field: 'SENTRY_DSN' },
+          ADMIN_CHAT_URL: { type: '1password', item: 'Bklt', field: 'ADMIN_CHAT_URL' },
           RAILS_ENV: 'production'                            # Environment setting
         },
         cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
@@ -173,7 +174,8 @@ module Config
         environment: {                                       # Environment variables
           DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'DATABASE_URL' },
           RAILS_MASTER_KEY: { type: '1password', item: 'junk-drawer', field: 'RAILS_MASTER_KEY' },
-          RAILS_ENV: 'production'                            # Environment setting
+          RAILS_ENV: 'production',                            # Environment setting
+          ADMIN_CHAT_URL: { type: '1password', item: 'junk-drawer', field: 'ADMIN_CHAT_URL' }
         },
         cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
       },
