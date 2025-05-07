@@ -60,7 +60,7 @@ module Config
       image: 'pgvector/pgvector:pg17',                       # Docker image to use (specific version recommended)
       ports: ['5432:5432'],                                  # Port mapping (host:container)
       volumes: ["#{DATA_DIR}/postgres:/var/lib/postgresql/data"], # Data persistence
-      environment: {                                         # Environment variables
+      environment: { # Environment variables
         # Credentials retrieved from 1Password (CHANGE THESE to your 1Password items)
         POSTGRES_USER: { type: '1password', item: 'Postgres Docker', field: 'username' },
         POSTGRES_PASSWORD: { type: '1password', item: 'Postgres Docker', field: 'password' },
@@ -116,7 +116,7 @@ module Config
       depends_on: ['mysql']                                  # This container depends on MySQL
     },
     {
-      name: 'signal',                                    # Container name
+      name: 'signal', # Container name
       image: 'bbernhard/signal-cli-rest-api:latest',         # Docker image to use
       ports: ['8080:8080'],                                  # Port mapping (host:container)
       volumes: ["#{DATA_DIR}/signal:/home/.local/share/signal-cli"], # Data persistence
@@ -141,8 +141,8 @@ module Config
       repo_url: 'git@github.com:contraptionco/ghost.git',    # Git repo
       local_path: "#{CODE_DIR}/ghost",                       # Where to clone the repo
       deploy_path: "#{DATA_DIR}/ghost/themes/contraption-ghost-theme", # Where to deploy the built theme (optional)
-      build_cmd: 'asdf install && npm install && npm run build', # Build command
-      auto_update: true,                                     # Whether to auto-update when repo changes
+      build_cmd: 'asdf install && corepack enable && npm install && npm run build', # Build command
+      auto_update: true, # Whether to auto-update when repo changes
       after_deploy: { type: 'restart_service', service: 'ghost' } # Action after deployment
     },
     {
@@ -168,8 +168,8 @@ module Config
       name: 'postcard',                                          # Service name
       repo_url: 'git@github.com:contraptionco/postcard.git',     # CHANGE THIS to your repository
       local_path: "#{CODE_DIR}/postcard",                        # Where to clone the repo
-      container_config: {                                    # Container configuration after build
-        image_name: 'postcard',                                  # Docker image name to create
+      container_config: { # Container configuration after build
+        image_name: 'postcard', # Docker image name to create
         ports: ['3000:3000'],                                # Port mapping (host:container)
         environment: {                                       # Environment variables
           DATABASE_URL: { type: '1password', item: 'Postcard', field: 'DATABASE_URL' },
@@ -185,13 +185,13 @@ module Config
       name: 'junk-drawer',                                          # Service name
       repo_url: 'git@github.com:contraptionco/junk-drawer.git',     # CHANGE THIS to your repository
       local_path: "#{CODE_DIR}/junk-drawer",                        # Where to clone the repo
-      container_config: {                                    # Container configuration after build
-        image_name: 'junk-drawer',                                  # Docker image name to create
+      container_config: { # Container configuration after build
+        image_name: 'junk-drawer', # Docker image name to create
         ports: ['4001:3000'],                                # Port mapping (host:container)
         environment: {                                       # Environment variables
           DATABASE_URL: { type: '1password', item: 'junk-drawer', field: 'DATABASE_URL' },
           RAILS_MASTER_KEY: { type: '1password', item: 'junk-drawer', field: 'RAILS_MASTER_KEY' },
-          RAILS_ENV: 'production',                            # Environment setting
+          RAILS_ENV: 'production' # Environment setting
         },
         cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
       },
@@ -208,14 +208,14 @@ module Config
       compose_override: {
         services: {
           plausible: {
-            ports: ['127.0.0.1:8000:8000']                   # Port mapping for the service
-                                                             # Cloudflare connects to port 8000 to serve:
-                                                             # telegraph.contraption.co
+            ports: ['127.0.0.1:8000:8000'] # Port mapping for the service
+            # Cloudflare connects to port 8000 to serve:
+            # telegraph.contraption.co
           }
         }
       },
-      auto_update: true                                      # Whether to auto-update when repo changes
-    },
+      auto_update: true # Whether to auto-update when repo changes
+    }
   ]
 
   #-----------------------------------------------------------------------------------
@@ -231,8 +231,8 @@ module Config
       cmd: '/opt/homebrew/opt/netdata/sbin/netdata',         # Command path (CHANGE if path differs)
       detection: 'pgrep -f "/opt/homebrew/opt/netdata/sbin/netdata"', # How to detect if running
       start_cmd: '/opt/homebrew/opt/netdata/sbin/netdata -D' # Command to start the service
-                                                             # Cloudflare connects to port 19999 to serve:
-                                                             # toolbox.contraption.co
+      # Cloudflare connects to port 19999 to serve:
+      # toolbox.contraption.co
     }
   ]
 
