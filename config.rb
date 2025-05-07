@@ -141,7 +141,7 @@ module Config
       repo_url: 'git@github.com:contraptionco/ghost.git',    # Git repo
       local_path: "#{CODE_DIR}/ghost",                       # Where to clone the repo
       deploy_path: "#{DATA_DIR}/ghost/themes/contraption-ghost-theme", # Where to deploy the built theme (optional)
-      build_cmd: 'asdf install && npm install && npm run build', # Build command
+      build_cmd: 'asdf install && /Users/philip/.asdf/shims/npm install && /Users/philip/.asdf/shims/npm run build', # Build command
       auto_update: true, # Whether to auto-update when repo changes
       after_deploy: { type: 'restart_service', service: 'ghost' } # Action after deployment
     },
