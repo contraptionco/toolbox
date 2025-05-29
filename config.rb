@@ -168,6 +168,8 @@ module Config
       name: 'postcard',                                          # Service name
       repo_url: 'git@github.com:contraptionco/postcard.git',     # CHANGE THIS to your repository
       local_path: "#{CODE_DIR}/postcard",                        # Where to clone the repo
+      # Environment configuration from 1Password
+      env_config: { type: '1password', item: 'Postcard', field: 'env' },
       container_config: { # Container configuration after build
         image_name: 'postcard', # Docker image name to create
         ports: ['3000:3000'],                                # Port mapping (host:container)
