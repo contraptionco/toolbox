@@ -85,7 +85,7 @@ module Config
 
     {
       name: 'ghost',                                         # Container name
-      image: 'ghost:5.109.2',                                # Docker image to use (specific version recommended)
+      image: 'ghost:5.129.0',                                # Docker image to use (specific version recommended)
       ports: ['2368:2368'],                                  # Port mapping (host:container)
       volumes: ["#{DATA_DIR}/ghost:/var/lib/ghost/content"], # Data persistence
       environment: {                                         # Environment variables
