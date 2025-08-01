@@ -1,4 +1,10 @@
-# Toolbox: Simple automation for a Mac-based home web server
+<div align="center">
+  <a href="https://contraption.co/projects">
+    <img src="/assets/toolbox.svg" alt="Toolbox" width="200">
+  </a>
+  <br /><br />
+</div>
+
 
 A lightweight framework for running multiple web apps on a Mac Mini (or, any Mac). This is the actual script that powers [www.contraption.co](https://contraption.co) and other web applications from a single Mac Mini home server. Learn more about the story in ["A mini data center"](https://www.contraption.co/a-mini-data-center/).
 
