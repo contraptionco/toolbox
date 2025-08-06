@@ -229,6 +229,30 @@ All web applications run in Docker containers, making them isolated and easy to 
 - Automatic updates when new images are available
 - Network configuration
 - Volume management for persistent data
+- Health checks for service monitoring
+
+#### Ollama LLM Service
+
+The toolbox includes configuration for running Ollama, an open-source LLM inference server:
+
+- **Model**: Configured with `gpt-oss:20b` by default
+- **Port**: Exposed on `11434` for API access
+- **Access**: Other containers can reach it via `http://ollama:11434` within the Docker network
+- **External access**: Available at `http://localhost:11434` from the host
+- **Model persistence**: Models are stored in `~/data/ollama` and persist across container restarts
+- **Auto-start**: Automatically starts on boot and pulls the specified model if not already present
+- **Health monitoring**: Includes health checks to ensure the service is responsive
+
+To test the Ollama service after starting:
+```bash
+# Test from the host
+curl http://localhost:11434/api/generate \
+     -d '{"model":"gpt-oss:20b","prompt":"Write one sentence about Mac Minis."}'
+
+# From another Docker container in the toolbox network
+curl http://ollama:11434/api/generate \
+     -d '{"model":"gpt-oss:20b","prompt":"Hello, Ollama!"}'
+```
 
 ### Cloudflare Tunnel
 

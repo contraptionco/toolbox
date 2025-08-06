@@ -109,6 +109,15 @@ module Core
         cmd << "-p #{port}"
       end
 
+      # Add healthcheck if specified
+      if service_config[:healthcheck]
+        hc = service_config[:healthcheck]
+        cmd << "--health-cmd \"#{hc[:test]}\""
+        cmd << "--health-interval #{hc[:interval]}" if hc[:interval]
+        cmd << "--health-timeout #{hc[:timeout]}" if hc[:timeout]
+        cmd << "--health-retries #{hc[:retries]}" if hc[:retries]
+      end
+
       # Add image
       cmd << service_config[:image]
 

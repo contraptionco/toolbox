@@ -126,6 +126,24 @@ module Config
         SWAGGER_USE_HTTPS_AS_PREFERRED_SCHEME: 'true'
       },
       auto_update: true                                      # Whether to auto-update when image tag changes
+    },
+    {
+      name: 'ollama',                                        # Container name
+      image: 'ollama/ollama:latest',                         # Official Ollama Docker image
+      ports: ['11434:11434'],                                # Port mapping for Ollama API
+      volumes: ["#{DATA_DIR}/ollama:/root/.ollama"],         # Persist models across restarts
+      environment: {                                         # Environment variables
+        OLLAMA_MODELS: '/root/.ollama'                       # Models directory inside container
+      },
+      # Command to start Ollama and pull the gpt-oss:20b model
+      cmd: '/bin/sh -c "ollama serve & sleep 20 && ollama pull gpt-oss:20b && wait"',
+      auto_update: true,                                     # Whether to auto-update when image tag changes
+      healthcheck: {                                         # Health check configuration
+        test: 'curl -fs http://localhost:11434/ || exit 1',
+        interval: '30s',
+        timeout: '5s',
+        retries: 5
+      }
     }
   ]
 
