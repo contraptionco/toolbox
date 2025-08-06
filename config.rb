@@ -126,24 +126,6 @@ module Config
         SWAGGER_USE_HTTPS_AS_PREFERRED_SCHEME: 'true'
       },
       auto_update: true                                      # Whether to auto-update when image tag changes
-    },
-    {
-      name: 'ollama',                                        # Container name
-      image: 'ollama/ollama:latest',                         # Official Ollama Docker image
-      ports: ['11434:11434'],                                # Port mapping for Ollama API
-      volumes: ["#{DATA_DIR}/ollama:/root/.ollama"],         # Persist models across restarts
-      environment: {                                         # Environment variables
-        OLLAMA_MODELS: '/root/.ollama'                       # Models directory inside container
-      },
-      auto_update: true,                                     # Whether to auto-update when image tag changes
-      healthcheck: {                                         # Health check configuration
-        test: 'curl -fs http://localhost:11434/ || exit 1',
-        interval: '30s',
-        timeout: '5s',
-        retries: 5
-      },
-      # Command to run after container starts to pull the model
-      post_start_cmd: 'docker exec ollama ollama pull gpt-oss:20b'
     }
   ]
 
@@ -254,6 +236,17 @@ module Config
       start_cmd: '/opt/homebrew/opt/netdata/sbin/netdata -D' # Command to start the service
       # Cloudflare connects to port 19999 to serve:
       # toolbox.contraption.co
+    },
+    # Ollama LLM Service (running natively for GPU support)
+    {
+      name: 'ollama',                                        # Service name
+      type: 'system',                                        # Service type
+      cmd: 'ollama',                                         # Command path (installed via brew)
+      detection: 'pgrep -f "ollama serve"',                  # How to detect if running
+      start_cmd: 'OLLAMA_HOST=0.0.0.0:11434 OLLAMA_MODELS=~/data/ollama/models ollama serve', # Start with custom host and model path
+      post_start_cmd: 'sleep 5 && ollama pull gpt-oss:20b' # Pull the model after starting
+      # Cloudflare connects to port 11434 to serve:
+      # ollama.contraption.co
     }
   ]
 
