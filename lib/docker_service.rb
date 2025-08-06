@@ -130,6 +130,21 @@ module Core
       raise "Error starting container #{service_config[:name]}: #{stderr}" unless status.success?
 
       puts "Container #{service_config[:name]} started successfully."
+      
+      # Execute post-start command if specified
+      if service_config[:post_start_cmd]
+        puts "Running post-start command for #{service_config[:name]}..."
+        # Wait a moment for the container to be fully ready
+        sleep 3
+        stdout, stderr, status = Open3.capture3(service_config[:post_start_cmd])
+        if status.success?
+          puts "Post-start command completed successfully."
+        else
+          puts "Warning: Post-start command failed: #{stderr}"
+          puts "You may need to run this manually: #{service_config[:post_start_cmd]}"
+        end
+      end
+      
       true
     end
 

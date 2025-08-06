@@ -237,8 +237,11 @@ The toolbox includes configuration for running Ollama, an open-source LLM infere
 
 - **Model**: Configured with `gpt-oss:20b` by default
 - **Port**: Exposed on `11434` for API access
-- **Access**: Other containers can reach it via `http://ollama:11434` within the Docker network
-- **External access**: Available at `http://localhost:11434` from the host
+- **Access Methods**:
+  - Internal Docker network: `http://ollama:11434`
+  - Local host: `http://localhost:11434`
+  - Via Cloudflare Tunnel: `https://ollama.contraption.co` (configure your domain in `config.yml`)
+- **Web Interface**: Ollama provides a web UI accessible at the same URL
 - **Model persistence**: Models are stored in `~/data/ollama` and persist across container restarts
 - **Auto-start**: Automatically starts on boot and pulls the specified model if not already present
 - **Health monitoring**: Includes health checks to ensure the service is responsive
