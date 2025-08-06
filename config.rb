@@ -236,17 +236,6 @@ module Config
       start_cmd: '/opt/homebrew/opt/netdata/sbin/netdata -D' # Command to start the service
       # Cloudflare connects to port 19999 to serve:
       # toolbox.contraption.co
-    },
-    # Ollama LLM Service (running natively for GPU support)
-    {
-      name: 'ollama',                                        # Service name
-      type: 'system',                                        # Service type
-      cmd: 'ollama',                                         # Command path (installed via brew)
-      detection: 'pgrep -f "ollama serve"',                  # How to detect if running
-      start_cmd: 'OLLAMA_HOST=0.0.0.0:11434 OLLAMA_MODELS=~/data/ollama/models ollama serve', # Start with custom host and model path
-      post_start_cmd: 'sleep 5 && ollama pull gpt-oss:20b' # Pull the model after starting
-      # Cloudflare connects to port 11434 to serve:
-      # ollama.contraption.co
     }
   ]
 
