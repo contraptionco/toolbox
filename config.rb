@@ -218,6 +218,25 @@ module Config
         }
       },
       auto_update: true # Whether to auto-update when repo changes
+    },
+    {
+      name: 'mcp',                                           # Service name
+      repo_url: 'git@github.com:contraptionco/mcp.git',  # Git repo
+      local_path: "#{CODE_DIR}/mcp",                         # Where to clone the repo
+      container_config: {                                    # Container configuration after build
+        image_name: 'mcp',                                   # Docker image name to create
+        ports: ['8001:8000'],                                # Port mapping (host:container) - mapping 8001 to container's 8000
+        environment: {                                       # Environment variables from 1Password
+          CHROMA_TENANT: { type: '1password', item: 'MCP', field: 'CHROMA_TENANT' },
+          CHROMA_DATABASE: { type: '1password', item: 'MCP', field: 'CHROMA_DATABASE' },
+          CHROMA_API_KEY: { type: '1password', item: 'MCP', field: 'CHROMA_API_KEY' },
+          CHROMA_COLLECTION: { type: '1password', item: 'MCP', field: 'CHROMA_COLLECTION' },
+          GHOST_ADMIN_API_KEY: { type: '1password', item: 'MCP', field: 'GHOST_ADMIN_API_KEY' },
+          GHOST_API_URL: { type: '1password', item: 'MCP', field: 'GHOST_API_URL' },
+          WEBHOOK_SECRET: { type: '1password', item: 'MCP', field: 'WEBHOOK_SECRET' }
+        }
+      },
+      auto_update: true                                      # Whether to auto-update when repo changes
     }
   ]
 

@@ -39,4 +39,6 @@ ingress:
     service: http://localhost:8080
   - hostname: ollama.contraption.co
     service: http://localhost:11434
+  - hostname: mcp.contraption.co
+    service: http://localhost:8001
   - service: http_status:404
