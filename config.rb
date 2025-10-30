@@ -237,6 +237,23 @@ module Config
         }
       },
       auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
+      name: 'quesogpt',                                      # Service name
+      repo_url: 'git@github.com:contraptionco/quesogpt.git', # Git repo
+      local_path: "#{CODE_DIR}/quesogpt",                    # Where to clone the repo
+      container_config: {                                    # Container configuration after build
+        image_name: 'quesogpt',                              # Docker image name to create
+        ports: ['3001:3000'],                                # Map host 3001 -> container 3000
+        environment: {                                       # Environment variables from 1Password
+          CHROMA_TENANT:   { type: '1password', item: 'quesogpt', field: 'CHROMA_TENANT' },
+          CHROMA_DATABASE: { type: '1password', item: 'quesogpt', field: 'CHROMA_DATABASE' },
+          CHROMA_API_KEY:  { type: '1password', item: 'quesogpt', field: 'CHROMA_API_KEY' },
+          OPENAI_API_KEY:  { type: '1password', item: 'quesogpt', field: 'OPENAI_API_KEY' },
+          CHROMA_URL:      { type: '1password', item: 'quesogpt', field: 'CHROMA_URL' }
+        }
+      },
+      auto_update: true                                      # Whether to auto-update when repo changes
     }
   ]
 
