@@ -12,10 +12,13 @@ require_relative '../lib/one_password'
 
 module Scripts
   class GhostBackup
+    # NOTE -
+    # db export requires manually updating mysql to give api key
+    # permissions to have export capabilities.
+
     REPO_URL = 'git@github.com:contraptionco/ghost-backup.git'
     REPO_PATH = File.join(Config::CODE_DIR, 'ghost-backup')
     GHOST_DATA_PATH = File.join(Config::DATA_DIR, 'ghost')
-    EXPORTS_DIR = File.join(REPO_PATH, 'exports')
     LOCK_FILE = File.expand_path('../ghost_backup.lock.txt', __dir__)
     LOCK_TIMEOUT = 3600 # seconds
     API_BASE = 'https://write.contraption.co/ghost/api/admin'
@@ -37,7 +40,7 @@ module Scripts
         ensure_backup_repo
         mirror_ghost_data
         export_members
-        # export_configuration # Temporarily disabled per request
+        export_configuration
         commit_and_push_changes
       end
     end
@@ -126,22 +129,17 @@ module Scripts
     end
 
     def export_members
-      target = File.join(exports_directory, 'ghost-members.csv')
+      target = File.join(REPO_PATH, 'ghost-members.csv')
       puts "[GhostBackup] Exporting members to #{target}..."
       response = download_admin_resource(MEMBERS_EXPORT_ENDPOINT)
       save_response(response, target)
     end
 
     def export_configuration
-      target = File.join(exports_directory, "ghost-configuration-#{@timestamp}.json")
+      target = File.join(REPO_PATH, 'ghost-export.json')
       puts "[GhostBackup] Exporting configuration to #{target}..."
       response = download_admin_resource(CONFIG_EXPORT_ENDPOINT)
       save_response(response, target)
-    end
-
-    def exports_directory
-      FileUtils.mkdir_p(EXPORTS_DIR)
-      EXPORTS_DIR
     end
 
     def save_response(response, path)
