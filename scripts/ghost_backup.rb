@@ -20,7 +20,7 @@ module Scripts
     LOCK_TIMEOUT = 3600 # seconds
     API_BASE = 'https://write.contraption.co/ghost/api/admin'
     MEMBERS_EXPORT_ENDPOINT = 'members/upload/?filter=&limit=all'
-    CONFIG_EXPORT_ENDPOINT = 'db/'
+    CONFIG_EXPORT_ENDPOINT = 'db/?include=posts,posts_tags,tags,settings,tiers,members'
     API_KEY_ITEM = 'toolbox'
     API_KEY_FIELD = 'GHOST_ADMIN_API_KEY'
 
@@ -180,7 +180,7 @@ module Scripts
       payload = {
         iat: iat,
         exp: iat + 300,
-        aud: '/admin/'
+        aud: '/ghost/api/admin/'
       }
       header = {
         alg: 'HS256',
