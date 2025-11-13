@@ -126,7 +126,7 @@ module Scripts
     end
 
     def export_members
-      target = File.join(exports_directory, "ghost-members-#{@timestamp}.csv")
+      target = File.join(exports_directory, 'ghost-members.csv')
       puts "[GhostBackup] Exporting members to #{target}..."
       response = download_admin_resource(MEMBERS_EXPORT_ENDPOINT)
       save_response(response, target)
