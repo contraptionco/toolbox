@@ -20,7 +20,9 @@ module Scripts
     REPO_PATH = File.join(Config::CODE_DIR, 'ghost-backup')
     GHOST_DATA_PATH = File.join(Config::DATA_DIR, 'ghost')
     LOCK_FILE = File.expand_path('../ghost_backup.lock.txt', __dir__)
+    LAST_SUCCESS_FILE = File.expand_path('../ghost_backup.last_success.txt', __dir__)
     LOCK_TIMEOUT = 3600 # seconds
+    MIN_INTERVAL = 3600 # seconds between successful runs
     API_BASE = 'https://write.contraption.co/ghost/api/admin'
     MEMBERS_EXPORT_ENDPOINT = 'members/upload/?filter=&limit=all'
     CONFIG_EXPORT_ENDPOINT = 'db/?include=posts,posts_tags,tags,settings,tiers,members'
@@ -37,11 +39,17 @@ module Scripts
 
     def run
       with_lock do
+        if recently_ran?
+          puts "[GhostBackup] Skipping backup, already ran successfully at #{last_success_time}."
+          next
+        end
+
         ensure_backup_repo
         mirror_ghost_data
         export_members
         export_configuration
         commit_and_push_changes
+        mark_success
       end
     end
 
@@ -222,6 +230,25 @@ module Scripts
       stdout, stderr, status = Open3.capture3(command)
       raise "[GhostBackup] #{command} failed: #{stderr}" unless status.success?
       stdout
+    end
+
+    def mark_success
+      File.write(LAST_SUCCESS_FILE, Time.now.utc.iso8601)
+    end
+
+    def last_success_time
+      return unless File.exist?(LAST_SUCCESS_FILE)
+
+      Time.parse(File.read(LAST_SUCCESS_FILE).strip)
+    rescue ArgumentError
+      nil
+    end
+
+    def recently_ran?
+      timestamp = last_success_time
+      return false unless timestamp
+
+      Time.now.utc - timestamp < MIN_INTERVAL
     end
   end
 end
