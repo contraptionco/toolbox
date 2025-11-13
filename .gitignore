@@ -1,3 +1,4 @@
 *.log
 log_files.yml
 .DS_Store
+ghost_backup.lock.txt

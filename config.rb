@@ -258,6 +258,22 @@ module Config
   ]
 
   #-----------------------------------------------------------------------------------
+  # SCRIPTS - OPTIONAL AUTOMATIONS
+  #-----------------------------------------------------------------------------------
+
+  SCRIPTS = [
+    {
+      name: 'ghost_backup',                                  # Script name
+      type: 'ruby',                                          # Script type (:ruby or :shell)
+      description: 'Back up Ghost data and metadata to ghost-backup repository',
+      require: 'scripts/ghost_backup',                       # Relative path to the script file
+      class_name: 'Scripts::GhostBackup',                    # Runner class
+      method: :run,                                          # Method to execute
+      enabled: true                                          # Toggle script without removing config
+    }
+  ]
+
+  #-----------------------------------------------------------------------------------
   # SYSTEM SERVICES - CUSTOMIZE THESE BASED ON YOUR NEEDS
   #-----------------------------------------------------------------------------------
 

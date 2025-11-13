@@ -5,6 +5,7 @@ require_relative 'tunnel_service'
 require_relative 'uptime_robot'
 require_relative 'one_password'
 require_relative 'telemetry'
+require_relative 'script_runner'
 require_relative '../config'
 require 'fileutils'
 
@@ -56,6 +57,10 @@ module Core
       end
     end
 
+    def self.run_scripts
+      Core::ScriptRunner.run_scripts
+    end
+
     def self.start_system_services
       Config::SYSTEM_SERVICES.each do |service_config|
         Core::SystemService.ensure_service_running(service_config)
@@ -83,6 +88,8 @@ module Core
       start_docker_services
 
       start_git_services
+
+      run_scripts
 
       report_uptime
 
