@@ -19,9 +19,8 @@ module Scripts
     LOCK_FILE = File.expand_path('../ghost_backup.lock.txt', __dir__)
     LOCK_TIMEOUT = 3600 # seconds
     API_BASE = 'https://write.contraption.co/ghost/api/admin'
-    API_VERSION = 'v5'
-    MEMBERS_EXPORT_ENDPOINT = '/members/export/'
-    CONFIG_EXPORT_ENDPOINT = '/db/'
+    MEMBERS_EXPORT_ENDPOINT = 'members/upload/?filter=&limit=all'
+    CONFIG_EXPORT_ENDPOINT = 'db/'
     API_KEY_ITEM = 'toolbox'
     API_KEY_FIELD = 'GHOST_ADMIN_API_KEY'
 
@@ -204,7 +203,7 @@ module Scripts
 
     def build_uri(endpoint)
       endpoint = endpoint.sub(%r{^/}, '')
-      URI.parse("#{API_BASE}/#{API_VERSION}/#{endpoint}")
+      URI.parse("#{API_BASE}/#{endpoint}")
     end
 
     def commit_and_push_changes
