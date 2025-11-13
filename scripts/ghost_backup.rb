@@ -37,7 +37,7 @@ module Scripts
         ensure_backup_repo
         mirror_ghost_data
         export_members
-        export_configuration
+        # export_configuration # Temporarily disabled per request
         commit_and_push_changes
       end
     end
