@@ -270,6 +270,15 @@ module Config
       class_name: 'Scripts::GhostBackup',                    # Runner class
       method: :run,                                          # Method to execute
       enabled: true                                          # Toggle script without removing config
+    },
+    {
+      name: 'postgres_backup',
+      type: 'ruby',
+      description: 'Export Postgres databases and upload to S3',
+      require: 'scripts/postgres_backup',
+      class_name: 'Scripts::PostgresBackup',
+      method: :run,
+      enabled: true
     }
   ]
 
