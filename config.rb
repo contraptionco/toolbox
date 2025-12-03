@@ -254,6 +254,16 @@ module Config
         }
       },
       auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
+      name: 'fonts',                                         # Service name
+      repo_url: 'git@github.com:contraptionco/fonts.git',    # Git repo
+      local_path: "#{CODE_DIR}/fonts",                       # Where to clone the repo
+      container_config: {                                    # Container configuration after build
+        image_name: 'fonts',                                 # Docker image name to create
+        ports: ['3002:80']                                   # Map host 3002 -> container 80 (nginx default)
+      },
+      auto_update: true                                      # Whether to auto-update when repo changes
     }
   ]
 
