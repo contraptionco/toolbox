@@ -204,7 +204,7 @@ module Config
       name: 'plausible',                                     # Service name
       repo_url: 'https://github.com/plausible/community-edition', # Repo URL (public repo)
       local_path: "#{DATA_DIR}/plausible/plausible-ce",      # Where to clone the repo
-      branch: 'v2.1.5',                                      # Specific branch or tag to use
+      branch: 'v3.1.0',                                      # Specific branch or tag to use
       # Environment configuration from 1Password (CHANGE THIS to your 1Password item)
       env_config: { type: '1password', item: 'Plausible', field: 'env' },
       # Custom docker-compose override
