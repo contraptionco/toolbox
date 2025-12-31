@@ -217,7 +217,7 @@ module Config
           }
         }
       },
-      auto_update: true # Whether to auto-update when repo changes
+      auto_update: false # Whether to auto-update when repo changes
     },
     {
       name: 'mcp',                                           # Service name
