@@ -43,4 +43,6 @@ ingress:
     service: http://localhost:8001
   - hostname: fonts.contraption.co
     service: http://localhost:3002
+  - hostname: trivet.contraption.co
+    service: http://localhost:3003
   - service: http_status:404

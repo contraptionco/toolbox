@@ -264,6 +264,24 @@ module Config
         ports: ['3002:80']                                   # Map host 3002 -> container 80 (nginx default)
       },
       auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
+      name: 'trivet',                                        # Service name
+      repo_url: 'git@github.com:contraptionco/trivet.git',   # Git repo
+      local_path: "#{CODE_DIR}/trivet",                      # Where to clone the repo
+      container_config: {                                    # Container configuration after build
+        image_name: 'trivet',                                # Docker image name to create
+        ports: ['3003:3000'],                                # Map host 3003 -> container 3000 (Trivet default)
+        environment: {                                       # Environment variables from 1Password
+          DATABASE_URL: { type: '1password', item: 'trivet', field: 'DATABASE_URL' },
+          GOOGLE_OAUTH_CLIENT_ID: { type: '1password', item: 'trivet', field: 'GOOGLE_OAUTH_CLIENT_ID' },
+          GOOGLE_OAUTH_CLIENT_SECRET: { type: '1password', item: 'trivet', field: 'GOOGLE_OAUTH_CLIENT_SECRET' },
+          TRIVET_SESSION_SECRET: { type: '1password', item: 'trivet', field: 'TRIVET_SESSION_SECRET' },
+          TRIVET_PUBLIC_BASE_URL: { type: '1password', item: 'trivet', field: 'TRIVET_PUBLIC_BASE_URL' },
+          PORT: '3000'
+        }
+      },
+      auto_update: true                                      # Whether to auto-update when repo changes
     }
   ]
 
