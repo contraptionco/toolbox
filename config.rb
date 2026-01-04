@@ -233,7 +233,8 @@ module Config
           CHROMA_COLLECTION: { type: '1password', item: 'MCP', field: 'CHROMA_COLLECTION' },
           GHOST_ADMIN_API_KEY: { type: '1password', item: 'MCP', field: 'GHOST_ADMIN_API_KEY' },
           GHOST_API_URL: { type: '1password', item: 'MCP', field: 'GHOST_API_URL' },
-          WEBHOOK_SECRET: { type: '1password', item: 'MCP', field: 'WEBHOOK_SECRET' }
+          WEBHOOK_SECRET: { type: '1password', item: 'MCP', field: 'WEBHOOK_SECRET' },
+          VOYAGEAI_API_KEY: { type: '1password', item: 'MCP', field: 'VOYAGEAI_API_KEY' }
         }
       },
       auto_update: true                                      # Whether to auto-update when repo changes
