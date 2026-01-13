@@ -147,11 +147,17 @@ module Scripts
       target = File.join(REPO_PATH, 'ghost-export.json')
       puts "[GhostBackup] Exporting configuration to #{target}..."
       response = download_admin_resource(CONFIG_EXPORT_ENDPOINT)
-      save_response(response, target)
+      save_json_response(response, target)
     end
 
     def save_response(response, path)
       File.binwrite(path, response.body)
+      path
+    end
+
+    def save_json_response(response, path)
+      data = JSON.parse(response.body)
+      File.write(path, JSON.pretty_generate(data) + "\n")
       path
     end
 
