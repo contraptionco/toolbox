@@ -267,6 +267,28 @@ module Config
       auto_update: true                                      # Whether to auto-update when repo changes
     },
     {
+      name: 'printing-press',                                # Service name
+      repo_url: 'git@github.com:philipithomas/printing-press.git', # Git repo
+      local_path: "#{CODE_DIR}/printing-press",              # Where to clone the repo
+      container_config: {                                    # Container configuration after build
+        image_name: 'printing-press',                        # Docker image name to create
+        ports: ['4242:8080'],                                # Map host 4242 -> container 8080
+        environment: {                                       # Environment variables from 1Password
+          DATABASE_URL: { type: '1password', item: 'printing-press', field: 'DATABASE_URL' },
+          M2M_API_KEY: { type: '1password', item: 'printing-press', field: 'M2M_API_KEY' },
+          AWS_ACCESS_KEY_ID: { type: '1password', item: 'printing-press', field: 'AWS_ACCESS_KEY_ID' },
+          AWS_SECRET_ACCESS_KEY: { type: '1password', item: 'printing-press', field: 'AWS_SECRET_ACCESS_KEY' },
+          AWS_REGION: { type: '1password', item: 'printing-press', field: 'AWS_REGION' },
+          SES_FROM_EMAIL: { type: '1password', item: 'printing-press', field: 'SES_FROM_EMAIL' },
+          EMAIL_BACKEND: 'ses',
+          SITE_URL: 'https://philipithomas.com',
+          HOST: '0.0.0.0',
+          PORT: '8080'
+        }
+      },
+      auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
       name: 'trivet',                                        # Service name
       repo_url: 'git@github.com:contraptionco/trivet.git',   # Git repo
       local_path: "#{CODE_DIR}/trivet",                      # Where to clone the repo
