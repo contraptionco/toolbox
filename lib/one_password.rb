@@ -17,8 +17,7 @@ module Core
     end
 
     def self.get_item(item_name, field_name)
-      cmd = "op item get \"#{item_name}\" --vault \"#{Config::OP_VAULT}\" --fields \"#{field_name}\""
-      cmd += ' --reveal' if %w[password secret_access_key].include?(field_name.to_s.downcase)
+      cmd = "op item get \"#{item_name}\" --vault \"#{Config::OP_VAULT}\" --fields \"#{field_name}\" --reveal"
 
       stdout, stderr, status = Open3.capture3(cmd)
       raise "Error fetching 1Password item: #{stderr}" unless status.success?
