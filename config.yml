@@ -5,10 +5,6 @@ ingress:
     service: tcp://localhost:5900
   - hostname: toolbox-ssh.contraption.co
     service: tcp://localhost:22
-  - hostname: www.contraption.co
-    service: http://localhost:2368
-  - hostname: contraption.co
-    service: http://localhost:2368
   - hostname: toolbox.contraption.co
     service: http://localhost:19999
   - hostname: telegraph.contraption.co
@@ -21,26 +17,12 @@ ingress:
     service: http://localhost:3000
   - hostname: postcard.page
     service: http://localhost:3000
-  - hostname: bklt.contraption.co
-    service: http://localhost:4000
-  - hostname: "*.booklet.group"
-    service: http://localhost:4000
-  - hostname: frctnl.xyz
-    service: http://localhost:4000
-  - hostname: www.frctnl.xyz
-    service: http://localhost:4000
   - hostname: junk-drawer.contraption.co
     service: http://localhost:4001
   - hostname: junk-drawer-api.contraption.co
     service: http://localhost:4001
   - hostname: quesogpt.contraption.co
     service: http://localhost:3001
-  - hostname: signal.contraption.co
-    service: http://localhost:8080
-  - hostname: ollama.contraption.co
-    service: http://localhost:11434
-  - hostname: mcp.contraption.co
-    service: http://localhost:8001
   - hostname: fonts.contraption.co
     service: http://localhost:3002
   - hostname: trivet.contraption.co

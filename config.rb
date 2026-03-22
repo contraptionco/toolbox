@@ -115,18 +115,6 @@ module Config
       auto_update: true,                                     # Whether to auto-update when image tag changes
       depends_on: ['mysql']                                  # This container depends on MySQL
     },
-    {
-      name: 'signal', # Container name
-      image: 'bbernhard/signal-cli-rest-api:latest',         # Docker image to use
-      ports: ['8080:8080'],                                  # Port mapping (host:container)
-      volumes: ["#{DATA_DIR}/signal:/home/.local/share/signal-cli"], # Data persistence
-      environment: {                                         # Environment variables
-        MODE: 'native',
-        SWAGGER_HOST: 'signal.contraption.co',
-        SWAGGER_USE_HTTPS_AS_PREFERRED_SCHEME: 'true'
-      },
-      auto_update: true                                      # Whether to auto-update when image tag changes
-    }
   ]
 
   #-----------------------------------------------------------------------------------
@@ -144,25 +132,6 @@ module Config
       build_cmd: 'asdf install && /Users/philip/.asdf/shims/npm install && /Users/philip/.asdf/shims/npm run build', # Build command
       auto_update: true, # Whether to auto-update when repo changes
       after_deploy: { type: 'restart_service', service: 'ghost' } # Action after deployment
-    },
-    {
-      name: 'bklt',                                          # Service name
-      repo_url: 'git@github.com:contraptionco/bklt.git',     # CHANGE THIS to your repository
-      local_path: "#{CODE_DIR}/bklt",                        # Where to clone the repo
-      container_config: {                                    # Container configuration after build
-        image_name: 'bklt',                                  # Docker image name to create
-        ports: ['4000:3000'],                                # Port mapping (host:container)
-        environment: {                                       # Environment variables
-          DATABASE_URL: { type: '1password', item: 'Bklt', field: 'DATABASE_URL' },
-          RAILS_MASTER_KEY: { type: '1password', item: 'Bklt', field: 'RAILS_MASTER_KEY' },
-          SECRET_KEY_BASE: { type: '1password', item: 'Bklt', field: 'SECRET_KEY_BASE' },
-          SENTRY_DSN: { type: '1password', item: 'Bklt', field: 'SENTRY_DSN' },
-          ADMIN_CHAT_URL: { type: '1password', item: 'Bklt', field: 'ADMIN_CHAT_URL' },
-          RAILS_ENV: 'production'                            # Environment setting
-        },
-        cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
-      },
-      auto_update: true                                      # Whether to auto-update when repo changes
     },
     {
       name: 'postcard',                                          # Service name
@@ -218,26 +187,6 @@ module Config
         }
       },
       auto_update: false # Whether to auto-update when repo changes
-    },
-    {
-      name: 'mcp',                                           # Service name
-      repo_url: 'git@github.com:contraptionco/mcp.git',  # Git repo
-      local_path: "#{CODE_DIR}/mcp",                         # Where to clone the repo
-      container_config: {                                    # Container configuration after build
-        image_name: 'mcp',                                   # Docker image name to create
-        ports: ['8001:8000'],                                # Port mapping (host:container) - mapping 8001 to container's 8000
-        environment: {                                       # Environment variables from 1Password
-          CHROMA_TENANT: { type: '1password', item: 'MCP', field: 'CHROMA_TENANT' },
-          CHROMA_DATABASE: { type: '1password', item: 'MCP', field: 'CHROMA_DATABASE' },
-          CHROMA_API_KEY: { type: '1password', item: 'MCP', field: 'CHROMA_API_KEY' },
-          CHROMA_COLLECTION: { type: '1password', item: 'MCP', field: 'CHROMA_COLLECTION' },
-          GHOST_ADMIN_API_KEY: { type: '1password', item: 'MCP', field: 'GHOST_ADMIN_API_KEY' },
-          GHOST_API_URL: { type: '1password', item: 'MCP', field: 'GHOST_API_URL' },
-          WEBHOOK_SECRET: { type: '1password', item: 'MCP', field: 'WEBHOOK_SECRET' },
-          VOYAGEAI_API_KEY: { type: '1password', item: 'MCP', field: 'VOYAGEAI_API_KEY' }
-        }
-      },
-      auto_update: true                                      # Whether to auto-update when repo changes
     },
     {
       name: 'quesogpt',                                      # Service name
