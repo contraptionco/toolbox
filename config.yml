@@ -37,6 +37,8 @@ ingress:
     service: http://localhost:4243
   - hostname: www.philipithomas.com
     service: http://localhost:4243
+  - hostname: bully-pulpit.philipithomas.com
+    service: http://localhost:4243
   - hostname: philipithomas.com
     service: http://localhost:3005
   - hostname: redirector.contraption.co
