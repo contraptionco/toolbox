@@ -27,20 +27,14 @@ ingress:
     service: http://localhost:3002
   - hostname: philipithomas-fonts.contraption.co
     service: http://localhost:3004
-  - hostname: fonts.philipithomas.com
-    service: http://localhost:3004
   - hostname: trivet.contraption.co
     service: http://localhost:3003
   - hostname: printing-press.contraption.co
     service: http://localhost:4242
   - hostname: bully-pulpit.contraption.co
     service: http://localhost:4243
-  - hostname: www.philipithomas.com
-    service: http://localhost:4243
   - hostname: bully-pulpit.philipithomas.com
     service: http://localhost:4243
-  - hostname: philipithomas.com
-    service: http://localhost:3005
   - hostname: redirector.contraption.co
     service: http://localhost:3005
   - hostname: booklet.group
