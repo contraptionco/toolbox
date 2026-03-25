@@ -238,6 +238,17 @@ module Config
       auto_update: true                                      # Whether to auto-update when repo changes
     },
     {
+      name: 'bully-pulpit',                                  # Service name
+      repo_url: 'git@github.com:philipithomas/bully-pulpit.git', # Git repo
+      local_path: "#{CODE_DIR}/bully-pulpit",                # Where to clone the repo
+      env_config: { type: '1password', item: 'bully-pulpit', field: 'env' },
+      container_config: {                                    # Container configuration after build
+        image_name: 'bully-pulpit',                          # Docker image name to create
+        ports: ['4243:3000']                                 # Map host 4243 -> container 3000
+      },
+      auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
       name: 'trivet',                                        # Service name
       repo_url: 'git@github.com:contraptionco/trivet.git',   # Git repo
       local_path: "#{CODE_DIR}/trivet",                      # Where to clone the repo

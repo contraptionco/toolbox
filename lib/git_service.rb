@@ -346,6 +346,10 @@ module Core
             cmd: service_config[:container_config][:cmd]
             # Add volumes if needed from container_config
           }
+          # Pass env file if env_config wrote a .env file
+          if service_config[:env_config]
+            docker_config[:env_file] = File.join(local_path, ".env")
+          end
           if repo_updated_or_cloned || service_config[:force_update] || !Core::DockerService.container_running?(container_name)
             Core::DockerService.stop_container(container_name) if Core::DockerService.container_running?(container_name)
             Core::DockerService.start_container(docker_config)

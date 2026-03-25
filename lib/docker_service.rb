@@ -94,6 +94,11 @@ module Core
       cmd << '--restart unless-stopped'
       cmd << "--network #{Config::NETWORK_NAME}"
 
+      # Add env file if specified
+      if service_config[:env_file]
+        cmd << "--env-file \"#{service_config[:env_file]}\""
+      end
+
       # Add environment variables
       resolved_env.each do |key, value|
         cmd << "-e #{key}=\"#{value}\""

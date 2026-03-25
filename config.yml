@@ -29,4 +29,6 @@ ingress:
     service: http://localhost:3003
   - hostname: printing-press.contraption.co
     service: http://localhost:4242
+  - hostname: bully-pulpit.contraption.co
+    service: http://localhost:4243
   - service: http_status:404
