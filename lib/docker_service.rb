@@ -17,7 +17,7 @@ module Core
     end
 
     def self.get_container_id(container_name)
-      stdout, stderr, status = Open3.capture3("docker ps --filter \"name=#{container_name}\" --format \"{{.ID}}\"")
+      stdout, stderr, status = Open3.capture3("docker ps --filter \"name=^#{container_name}$\" --format \"{{.ID}}\"")
       raise "Error checking for container #{container_name}: #{stderr}" unless status.success?
 
       stdout.strip
