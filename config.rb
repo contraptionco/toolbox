@@ -226,6 +226,16 @@ module Config
       auto_update: true                                        # Whether to auto-update when repo changes
     },
     {
+      name: 'redirects',                                       # Service name
+      repo_url: 'git@github.com:philipithomas/redirects.git',  # Git repo
+      local_path: "#{CODE_DIR}/redirects",                      # Where to clone the repo
+      container_config: {                                       # Container configuration after build
+        image_name: 'redirects',                                # Docker image name to create
+        ports: ['3005:80']                                      # Map host 3005 -> container 80 (nginx default)
+      },
+      auto_update: true                                         # Whether to auto-update when repo changes
+    },
+    {
       name: 'printing-press',                                # Service name
       repo_url: 'git@github.com:philipithomas/printing-press.git', # Git repo
       local_path: "#{CODE_DIR}/printing-press",              # Where to clone the repo

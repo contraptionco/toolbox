@@ -33,4 +33,6 @@ ingress:
     service: http://localhost:4242
   - hostname: bully-pulpit.contraption.co
     service: http://localhost:4243
+  - hostname: redirector.contraption.co
+    service: http://localhost:3005
   - service: http_status:404
