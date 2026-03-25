@@ -115,7 +115,11 @@ module Core
         line = line.strip
         next if line.empty? || line.start_with?('#')
         key, value = line.split('=', 2)
-        env_vars[key] = value if key && !key.empty? && value
+        next unless key && !key.empty? && value
+        value = value.strip
+        value = value[1...-1] if (value.start_with?('"') && value.end_with?('"')) ||
+                                 (value.start_with?("'") && value.end_with?("'"))
+        env_vars[key] = value
       end
       env_vars
     end
