@@ -107,6 +107,19 @@ module Core
       puts "Environment configuration saved to #{env_path}."
     end
 
+    def self.parse_env_file(env_file_path)
+      return {} unless File.exist?(env_file_path)
+
+      env_vars = {}
+      File.readlines(env_file_path).each do |line|
+        line = line.strip
+        next if line.empty? || line.start_with?('#')
+        key, value = line.split('=', 2)
+        env_vars[key] = value if key && !key.empty? && value
+      end
+      env_vars
+    end
+
     def self.apply_compose_override(local_path, override_config)
       puts "Applying docker-compose override to #{local_path}..."
 
@@ -162,11 +175,21 @@ module Core
       end
     end
 
-    def self.build_docker_image(local_path, image_name)
+    def self.build_docker_image(local_path, image_name, env_file: nil)
       puts "Building Docker image #{image_name} in #{local_path}..."
 
+      build_args = []
+      if env_file
+        parsed = parse_env_file(env_file)
+        parsed.each do |key, value|
+          build_args << "--build-arg #{key}=\"#{value}\""
+        end
+        puts "Passing #{parsed.size} environment variables as build args."
+      end
+
       Dir.chdir(local_path) do
-        stdout, stderr, status = Open3.capture3("docker build -t #{image_name} .")
+        cmd = "docker build -t #{image_name} #{build_args.join(' ')} ."
+        stdout, stderr, status = Open3.capture3(cmd)
         raise "Error building Docker image: #{stderr}" unless status.success?
       end
 
@@ -330,7 +353,8 @@ module Core
 
           # Build Docker image if specified (e.g., bklt)
           if service_config[:container_config]&.dig(:image_name)
-            build_docker_image(local_path, service_config[:container_config][:image_name])
+            env_file = service_config[:env_config] ? File.join(local_path, ".env") : nil
+            build_docker_image(local_path, service_config[:container_config][:image_name], env_file: env_file)
           end
         end # End build/deploy actions
 
@@ -338,18 +362,20 @@ module Core
         if service_config[:container_config]
           # Manage single Docker container
           container_name = name # Assume container name matches service name
+          # Merge env vars from .env file into container environment
+          container_env = service_config[:container_config][:environment] || {}
+          if service_config[:env_config]
+            env_file_vars = parse_env_file(File.join(local_path, ".env"))
+            container_env = env_file_vars.merge(container_env)
+          end
           docker_config = {
             name: container_name,
             image: service_config[:container_config][:image_name],
             ports: service_config[:container_config][:ports],
-            environment: service_config[:container_config][:environment],
+            environment: container_env,
             cmd: service_config[:container_config][:cmd]
             # Add volumes if needed from container_config
           }
-          # Pass env file if env_config wrote a .env file
-          if service_config[:env_config]
-            docker_config[:env_file] = File.join(local_path, ".env")
-          end
           if repo_updated_or_cloned || service_config[:force_update] || !Core::DockerService.container_running?(container_name)
             Core::DockerService.stop_container(container_name) if Core::DockerService.container_running?(container_name)
             Core::DockerService.start_container(docker_config)
