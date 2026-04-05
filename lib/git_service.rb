@@ -179,6 +179,11 @@ module Core
       end
     end
 
+    def self.image_exists?(image_name)
+      stdout, _stderr, status = Open3.capture3("docker image inspect #{image_name}")
+      status.success?
+    end
+
     def self.build_docker_image(local_path, image_name, env_file: nil)
       puts "Building Docker image #{image_name} in #{local_path}..."
 
@@ -380,6 +385,11 @@ module Core
             cmd: service_config[:container_config][:cmd]
             # Add volumes if needed from container_config
           }
+          # Build image if it doesn't exist yet (e.g. first deploy with no repo changes)
+          if service_config[:container_config][:image_name] && !image_exists?(service_config[:container_config][:image_name])
+            env_file = service_config[:env_config] ? File.join(local_path, ".env") : nil
+            build_docker_image(local_path, service_config[:container_config][:image_name], env_file: env_file)
+          end
           if repo_updated_or_cloned || service_config[:force_update] || !Core::DockerService.container_running?(container_name)
             Core::DockerService.stop_container(container_name) if Core::DockerService.container_running?(container_name)
             Core::DockerService.start_container(docker_config)
