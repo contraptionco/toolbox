@@ -226,6 +226,16 @@ module Config
       auto_update: true                                        # Whether to auto-update when repo changes
     },
     {
+      name: 'wedding-next',                                      # Service name
+      repo_url: 'git@github.com:philipithomas/wedding-next.git', # Git repo
+      local_path: "#{CODE_DIR}/wedding-next",                    # Where to clone the repo
+      container_config: {                                        # Container configuration after build
+        image_name: 'wedding-next',                              # Docker image name to create
+        ports: ['3006:3000']                                     # Map host 3006 -> container 3000
+      },
+      auto_update: true                                          # Whether to auto-update when repo changes
+    },
+    {
       name: 'redirects',                                       # Service name
       repo_url: 'git@github.com:philipithomas/redirects.git',  # Git repo
       local_path: "#{CODE_DIR}/redirects",                      # Where to clone the repo
