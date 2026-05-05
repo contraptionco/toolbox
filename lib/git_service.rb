@@ -99,6 +99,7 @@ module Core
       env_content.strip!
       if env_content.start_with?('"') && env_content.end_with?('"')
         env_content = env_content[1...-1]
+        env_content = env_content.gsub('""', '"')
       end
 
       env_path = File.join(local_path, ".env")
