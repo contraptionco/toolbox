@@ -33,12 +33,6 @@ ingress:
     service: http://localhost:3003
   - hostname: printing-press.contraption.co
     service: http://localhost:4242
-  - hostname: bully-pulpit.contraption.co
-    service: http://localhost:4243
-  - hostname: www.philipithomas.com
-    service: http://localhost:4243
-  - hostname: bully-pulpit.philipithomas.com
-    service: http://localhost:4243
   - hostname: philipandemma.com
     service: http://localhost:3006
   - hostname: www.philipandemma.com
