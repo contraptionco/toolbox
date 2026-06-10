@@ -25,10 +25,6 @@ ingress:
     service: http://localhost:3001
   - hostname: fonts.contraption.co
     service: http://localhost:3002
-  - hostname: philipithomas-fonts.contraption.co
-    service: http://localhost:3004
-  - hostname: fonts.philipithomas.com
-    service: http://localhost:3004
   - hostname: trivet.contraption.co
     service: http://localhost:3003
   - hostname: printing-press.contraption.co

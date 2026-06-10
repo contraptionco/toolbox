@@ -216,16 +216,6 @@ module Config
       auto_update: true                                      # Whether to auto-update when repo changes
     },
     {
-      name: 'philipithomas-fonts',                             # Service name
-      repo_url: 'git@github.com:philipithomas/fonts.git',     # Git repo
-      local_path: "#{CODE_DIR}/philipithomas-fonts",           # Where to clone the repo
-      container_config: {                                      # Container configuration after build
-        image_name: 'philipithomas-fonts',                     # Docker image name to create
-        ports: ['3004:80']                                     # Map host 3004 -> container 80 (nginx default)
-      },
-      auto_update: true                                        # Whether to auto-update when repo changes
-    },
-    {
       name: 'wedding-next',                                      # Service name
       repo_url: 'git@github.com:philipithomas/wedding-next.git', # Git repo
       local_path: "#{CODE_DIR}/wedding-next",                    # Where to clone the repo
