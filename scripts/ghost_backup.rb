@@ -2,11 +2,11 @@ require 'base64'
 require 'fileutils'
 require 'json'
 require 'net/http'
-require 'open3'
 require 'openssl'
 require 'time'
 require 'uri'
 require_relative '../config'
+require_relative '../lib/command_runner'
 require_relative '../lib/git_service'
 require_relative '../lib/one_password'
 
@@ -28,6 +28,7 @@ module Scripts
     CONFIG_EXPORT_ENDPOINT = 'db/?include=posts,posts_tags,tags,settings,tiers,members'
     API_KEY_ITEM = 'toolbox'
     API_KEY_FIELD = 'GHOST_ADMIN_API_KEY'
+    GIT_TIMEOUT = 300
 
     def self.run
       new.run
@@ -168,6 +169,7 @@ module Scripts
 
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == 'https'
+      http.open_timeout = 10
       http.read_timeout = 120
 
       response = http.request(request)
@@ -220,8 +222,14 @@ module Scripts
 
     def commit_and_push_changes
       Dir.chdir(REPO_PATH) do
-        status = `git status --porcelain`.strip
-        if status.empty?
+        stdout, stderr, status = Core::CommandRunner.capture3(
+          'git', 'status', '--porcelain',
+          timeout: GIT_TIMEOUT,
+          label: 'Ghost backup Git status'
+        )
+        raise "[GhostBackup] Git status failed: #{stderr}" unless status.success?
+
+        if stdout.strip.empty?
           puts '[GhostBackup] No changes detected, skipping commit.'
           return
         end
@@ -233,8 +241,12 @@ module Scripts
     end
 
     def run_git!(command)
-      stdout, stderr, status = Open3.capture3(command)
-      raise "[GhostBackup] #{command} failed: #{stderr}" unless status.success?
+      stdout, stderr, status = Core::CommandRunner.capture3(
+        command,
+        timeout: GIT_TIMEOUT,
+        label: 'Ghost backup Git command'
+      )
+      raise "[GhostBackup] Git command failed: #{stderr}" unless status.success?
       stdout
     end
 

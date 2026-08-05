@@ -1,27 +1,39 @@
-require 'open3'
 require 'fileutils'
+require 'digest'
 require 'net/http'
 require 'uri'
 require 'json'
 require 'yaml'
 require_relative '../config'
+require_relative 'command_runner'
 require_relative 'docker_service'
 require_relative 'one_password'
 
 module Core
   module GitService
+    GIT_TIMEOUT = 300
+    BUILD_TIMEOUT = 3600
+    DOCKER_QUERY_TIMEOUT = 30
+    DOCKER_BUILD_TIMEOUT = 3600
+    COMPOSE_TIMEOUT = 1200
+    HTTP_OPEN_TIMEOUT = 5
+    HTTP_READ_TIMEOUT = 10
+    HTTP_WRITE_TIMEOUT = 5
+
     def self.clone_repo(repo_url, local_path, branch = nil)
       puts "Cloning repository: #{repo_url} to #{local_path}..."
 
       # Create parent directories if they don't exist
       FileUtils.mkdir_p(File.dirname(local_path))
 
-      # Clone the repository
-      # Clone the repository normally, checking out the default branch
-      cmd = "git clone #{repo_url} #{local_path}"
-      cmd += " -b #{branch}" if branch # Add branch if specified (e.g., for Plausible)
-
-      stdout, stderr, status = Open3.capture3(cmd)
+      command = ['git', 'clone']
+      command.concat(['--branch', branch]) if branch
+      command.concat([repo_url, local_path])
+      _stdout, stderr, status = run_command(
+        *command,
+        timeout: GIT_TIMEOUT,
+        label: 'Git clone'
+      )
       raise "Error cloning repository: #{stderr}" unless status.success?
 
       puts "Repository cloned successfully."
@@ -30,17 +42,33 @@ module Core
     def self.pull_latest(local_path, branch = nil)
       Dir.chdir(local_path) do
         puts "Fetching latest changes..."
-        stdout, stderr, status = Open3.capture3("git fetch")
+        fetch_command = ['git', 'fetch', 'origin']
+        fetch_command << branch if branch
+        _stdout, stderr, status = run_command(
+          *fetch_command,
+          timeout: GIT_TIMEOUT,
+          label: 'Git fetch'
+        )
         raise "Error fetching updates: #{stderr}" unless status.success?
 
         if branch
           puts "Checking out branch: #{branch}..."
-          stdout, stderr, status = Open3.capture3("git checkout #{branch}")
+          _stdout, stderr, status = run_command(
+            'git', 'checkout', branch,
+            timeout: GIT_TIMEOUT,
+            label: 'Git checkout'
+          )
           raise "Error checking out branch #{branch}: #{stderr}" unless status.success?
         end
 
         puts "Pulling latest changes..."
-        stdout, stderr, status = Open3.capture3("git pull")
+        pull_command = ['git', 'pull', '--ff-only']
+        pull_command.concat(['origin', branch]) if branch
+        _stdout, stderr, status = run_command(
+          *pull_command,
+          timeout: GIT_TIMEOUT,
+          label: 'Git pull'
+        )
         raise "Error pulling updates: #{stderr}" unless status.success?
 
         puts "Repository updated successfully."
@@ -51,12 +79,27 @@ module Core
       return true unless Dir.exist?(local_path)
 
       Dir.chdir(local_path) do
-        stdout, stderr, status = Open3.capture3("git fetch")
+        _stdout, stderr, status = run_command(
+          'git', 'fetch', 'origin', branch,
+          timeout: GIT_TIMEOUT,
+          label: 'Git fetch'
+        )
         raise "Error fetching updates: #{stderr}" unless status.success?
 
+        stdout, stderr, status = run_command(
+          'git', 'branch', '--show-current',
+          timeout: GIT_TIMEOUT,
+          label: 'Git branch lookup'
+        )
+        raise "Error checking current branch: #{stderr}" unless status.success?
+        return true unless stdout.strip == branch
+
         # Compare local and remote branches
-        cmd = "git rev-list HEAD..origin/#{branch} --count"
-        stdout, stderr, status = Open3.capture3(cmd)
+        stdout, stderr, status = run_command(
+          'git', 'rev-list', "HEAD..origin/#{branch}", '--count',
+          timeout: GIT_TIMEOUT,
+          label: 'Git update check'
+        )
         raise "Error checking for updates: #{stderr}" unless status.success?
 
         stdout.strip.to_i > 0
@@ -66,7 +109,11 @@ module Core
     def self.run_build_command(local_path, build_cmd)
       puts "Running build command in #{local_path}: #{build_cmd}"
       Dir.chdir(local_path) do
-        stdout, stderr, status = Open3.capture3(build_cmd)
+        _stdout, stderr, status = run_command(
+          build_cmd,
+          timeout: BUILD_TIMEOUT,
+          label: 'Project build'
+        )
         raise "Error building project: #{stderr}" unless status.success?
         puts "Build completed successfully."
       end
@@ -87,8 +134,8 @@ module Core
       puts "Files deployed successfully."
     end
 
-    def self.apply_env_file(local_path, env_config)
-      puts "Applying environment configuration to #{local_path}..."
+    def self.apply_env_file(env_path, env_config)
+      puts "Applying environment configuration to #{env_path}..."
 
       env_content = if env_config.is_a?(Hash) && env_config[:type] == '1password'
         Core::OnePassword.get_item(env_config[:item], env_config[:field])
@@ -102,27 +149,12 @@ module Core
         env_content = env_content.gsub('""', '"')
       end
 
-      env_path = File.join(local_path, ".env")
-      File.write(env_path, env_content)
+      changed = !File.exist?(env_path) || File.binread(env_path) != env_content
+      atomic_write(env_path, env_content, mode: 0o600) if changed
+      File.chmod(0o600, env_path)
 
-      puts "Environment configuration saved to #{env_path}."
-    end
-
-    def self.parse_env_file(env_file_path)
-      return {} unless File.exist?(env_file_path)
-
-      env_vars = {}
-      File.readlines(env_file_path).each do |line|
-        line = line.strip
-        next if line.empty? || line.start_with?('#')
-        key, value = line.split('=', 2)
-        next unless key && !key.empty? && value
-        value = value.strip
-        value = value[1...-1] if (value.start_with?('"') && value.end_with?('"')) ||
-                                 (value.start_with?("'") && value.end_with?("'"))
-        env_vars[key] = value
-      end
-      env_vars
+      puts(changed ? "Environment configuration saved to #{env_path}." : 'Environment configuration is unchanged.')
+      changed
     end
 
     def self.apply_compose_override(local_path, override_config)
@@ -145,32 +177,40 @@ module Core
       end
 
       override_path = File.join(local_path, "compose.override.yml")
-      File.write(override_path, stringify_keys.call(override_config).to_yaml)
+      content = stringify_keys.call(override_config).to_yaml
+      changed = !File.exist?(override_path) || File.binread(override_path) != content
+      atomic_write(override_path, content, mode: 0o600) if changed
+      File.chmod(0o600, override_path)
 
-      puts "Docker Compose override saved to #{override_path}."
+      puts(changed ? "Docker Compose override saved to #{override_path}." : 'Docker Compose override is unchanged.')
+      changed
     end
 
-    def self.docker_compose_up(local_path)
+    def self.docker_compose_up(local_path, force_recreate: false)
       puts "Starting/Updating Docker Compose services in #{local_path}..."
       Dir.chdir(local_path) do
-        # Using --wait might be beneficial for services that depend on others
-        # Using --detach ensures it runs in the background
-        stdout, stderr, status = Open3.capture3("docker compose up --wait --detach")
+        command = ['docker', 'compose', 'up', '--wait', '--detach']
+        command << '--force-recreate' if force_recreate
+        stdout, stderr, status = run_command(
+          *command,
+          timeout: COMPOSE_TIMEOUT,
+          label: 'Docker Compose startup'
+        )
         puts stdout unless stdout.strip.empty?
-        unless status.success?
-          puts "Warning: 'docker compose up' failed for #{local_path}: #{stderr}"
-          # Consider raising an error depending on desired behavior
-          # raise "Error starting Docker Compose services: #{stderr}"
-        else
-           puts "Docker Compose services started/updated successfully for #{local_path}."
-        end
+        raise "Docker Compose startup failed for #{local_path}: #{stderr}" unless status.success?
+
+        puts "Docker Compose services started/updated successfully for #{local_path}."
       end
     end
 
     def self.docker_compose_down(local_path)
       puts "Stopping Docker Compose services in #{local_path}..."
       Dir.chdir(local_path) do
-        stdout, stderr, status = Open3.capture3("docker compose down")
+        stdout, stderr, status = run_command(
+          'docker', 'compose', 'down',
+          timeout: COMPOSE_TIMEOUT,
+          label: 'Docker Compose shutdown'
+        )
         puts stdout unless stdout.strip.empty?
         unless status.success?
            puts "Warning: 'docker compose down' failed for #{local_path}: #{stderr}"
@@ -181,29 +221,94 @@ module Core
     end
 
     def self.image_exists?(image_name)
-      stdout, _stderr, status = Open3.capture3("docker image inspect #{image_name}")
+      _stdout, _stderr, status = run_command(
+        'docker', 'image', 'inspect', image_name,
+        timeout: DOCKER_QUERY_TIMEOUT,
+        label: 'Docker image lookup'
+      )
       status.success?
     end
 
-    def self.build_docker_image(local_path, image_name, env_file: nil)
+    def self.build_docker_image(local_path, image_name)
       puts "Building Docker image #{image_name} in #{local_path}..."
 
-      build_args = []
-      if env_file
-        parsed = parse_env_file(env_file)
-        parsed.each do |key, value|
-          build_args << "--build-arg #{key}=\"#{value}\""
-        end
-        puts "Passing #{parsed.size} environment variables as build args."
-      end
-
       Dir.chdir(local_path) do
-        cmd = "docker build -t #{image_name} #{build_args.join(' ')} ."
-        stdout, stderr, status = Open3.capture3(cmd)
+        _stdout, stderr, status = run_command(
+          'docker', 'build', '-t', image_name, '.',
+          timeout: DOCKER_BUILD_TIMEOUT,
+          label: 'Docker image build'
+        )
         raise "Error building Docker image: #{stderr}" unless status.success?
       end
 
       puts "Docker image built successfully."
+    end
+
+    def self.compose_file_path(local_path)
+      %w[compose.yml compose.yaml docker-compose.yml docker-compose.yaml]
+        .map { |filename| File.join(local_path, filename) }
+        .find { |path| File.exist?(path) }
+    end
+
+    def self.runtime_env_path(service_name)
+      safe_name = service_name.to_s.gsub(/[^a-zA-Z0-9_.-]/, '_')
+      File.join(Config::RUNTIME_DIR, 'env', "#{safe_name}.env")
+    end
+
+    def self.deployment_marker_path(service_config)
+      return service_config[:deployment_marker_path] if service_config[:deployment_marker_path]
+
+      safe_name = service_config[:name].to_s.gsub(/[^a-zA-Z0-9_.-]/, '_')
+      File.join(Config::RUNTIME_DIR, 'deployments', "#{safe_name}.head")
+    end
+
+    def self.current_head(local_path)
+      stdout, stderr, status = Dir.chdir(local_path) do
+        run_command(
+          'git', 'rev-parse', 'HEAD',
+          timeout: GIT_TIMEOUT,
+          label: 'Git HEAD lookup'
+        )
+      end
+      raise "Error reading repository HEAD: #{stderr}" unless status.success?
+
+      stdout.strip
+    end
+
+    def self.deployment_state(service_config, head, env_path: nil, compose_override_path: nil)
+      config_for_digest = service_config.reject { |key, _value| key == :deployment_marker_path }
+      components = [Marshal.dump(config_for_digest)]
+      components << File.binread(env_path) if env_path && File.exist?(env_path)
+      if compose_override_path && File.exist?(compose_override_path)
+        components << File.binread(compose_override_path)
+      end
+      digest = Digest::SHA256.hexdigest(components.join("\0"))
+      "#{head}\n#{digest}\n"
+    end
+
+    def self.deployment_required?(service_config, state)
+      marker_path = deployment_marker_path(service_config)
+      return true unless File.exist?(marker_path)
+
+      File.binread(marker_path) != state
+    end
+
+    def self.mark_deployed(service_config, state)
+      atomic_write(deployment_marker_path(service_config), state, mode: 0o600)
+    end
+
+    def self.atomic_write(path, content, mode:)
+      FileUtils.mkdir_p(File.dirname(path))
+      temporary_path = "#{path}.tmp-#{Process.pid}-#{rand(1_000_000)}"
+      File.open(temporary_path, File::WRONLY | File::CREAT | File::EXCL, mode) do |file|
+        file.write(content)
+        file.flush
+        file.fsync
+      end
+      File.chmod(mode, temporary_path)
+      File.rename(temporary_path, path)
+    ensure
+      File.delete(temporary_path) if temporary_path && File.exist?(temporary_path)
     end
 
     def self.deploy_with_temp_folder(source_path, dest_path, build_cmd)
@@ -245,8 +350,13 @@ module Core
       releases_url = URI("https://api.github.com/repos/#{owner}/#{repo}/releases/latest")
 
       begin
-        response = Net::HTTP.get(releases_url)
-        data = JSON.parse(response)
+        http = Net::HTTP.new(releases_url.host, releases_url.port)
+        http.use_ssl = releases_url.scheme == 'https'
+        http.open_timeout = HTTP_OPEN_TIMEOUT
+        http.read_timeout = HTTP_READ_TIMEOUT
+        http.write_timeout = HTTP_WRITE_TIMEOUT if http.respond_to?(:write_timeout=)
+        response = http.request(Net::HTTP::Get.new(releases_url.request_uri))
+        data = JSON.parse(response.body)
         tag_name = data['tag_name']
         puts "Latest release tag found: #{tag_name}"
         tag_name
@@ -261,7 +371,11 @@ module Core
 
       Dir.chdir(local_path) do
         puts "Checking out tag: #{tag}..."
-        stdout, stderr, status = Open3.capture3("git checkout #{tag}")
+        _stdout, stderr, status = run_command(
+          'git', 'checkout', tag,
+          timeout: GIT_TIMEOUT,
+          label: 'Git tag checkout'
+        )
         # Ignore error if already on the tag
         unless status.success? || stderr.include?("Already on '#{tag}'") || stderr.include?("is already checked out at")
           raise "Error checking out tag #{tag}: #{stderr}"
@@ -273,7 +387,11 @@ module Core
     def self.run_install_command(local_path, install_cmd)
       puts "Running install command in #{local_path}: #{install_cmd}"
       Dir.chdir(local_path) do
-        stdout, stderr, status = Open3.capture3(install_cmd)
+        _stdout, stderr, status = run_command(
+          install_cmd,
+          timeout: BUILD_TIMEOUT,
+          label: 'Service install command'
+        )
         raise "Error running install command: #{stderr}" unless status.success?
         puts "Install command completed successfully."
       end
@@ -283,170 +401,202 @@ module Core
       name = service_config[:name]
       local_path = service_config[:local_path]
       repo_url = service_config[:repo_url]
-      branch = service_config[:branch] # May not be used if we fetch latest tag
+      branch = service_config[:branch]
       install_cmd = service_config[:install_cmd]
       use_compose = service_config[:use_compose]
 
       puts "Processing Git service: #{name}..."
 
-      # Check if repo exists locally
       repo_exists = Dir.exist?(local_path)
       repo_updated_or_cloned = false
 
-      # Clone or update repo
       if repo_exists
         if service_config[:auto_update]
           changes = has_changes?(local_path, branch || 'main')
           if changes || service_config[:force_update]
             puts "Changes detected in repository, updating..."
-            pull_latest(local_path, branch) # This might need adjustment if using tags primarily
+            pull_latest(local_path, branch)
             repo_updated_or_cloned = true
           else
             puts "No changes detected in repository."
           end
         else
-           puts "Auto-update disabled for #{name}. Checking repository status."
-           # Ensure repo is usable even if not updating
-           unless Dir.exist?(File.join(local_path, '.git'))
-             puts "Error: #{local_path} exists but is not a valid git repository. Please remove or fix it."
-             return # Stop processing this service
-           end
+          puts "Auto-update disabled for #{name}. Checking repository status."
+          unless Dir.exist?(File.join(local_path, '.git'))
+            raise "#{local_path} exists but is not a valid Git repository"
+          end
         end
       else
         puts "Repository not found locally, cloning..."
-        clone_repo(repo_url, local_path) # Clone without branch initially
-        repo_exists = true # It exists now
+        clone_repo(repo_url, local_path, branch)
+        repo_exists = true
         repo_updated_or_cloned = true
       end
 
-      # If a specific branch is configured, ensure it's checked out.
-      # Otherwise, attempt to checkout the latest release tag.
       if branch
-        # The pull_latest/clone_repo should have already checked out the branch if specified
         puts "Using specified branch: #{branch}"
       else
-        # Checkout latest release tag if no specific branch is set
         latest_tag = get_latest_release_tag(repo_url)
         checkout_tag(local_path, latest_tag)
       end
 
-      # Process if repo was just cloned/updated OR forced update OR does not exist yet
-      # Simplified logic: if repo exists now, ensure it's set up correctly
-      if repo_exists
-        # Handle environment file if specified (Plausible example)
-        if service_config[:env_config]
-          apply_env_file(local_path, service_config[:env_config])
-        end
+      env_path = nil
+      env_changed = false
+      if service_config[:env_config]
+        env_path = if service_config[:container_config]
+                     runtime_env_path(name)
+                   else
+                     File.join(local_path, '.env')
+                   end
+        env_changed = apply_env_file(env_path, service_config[:env_config])
 
-        # Handle Docker Compose override if specified (Plausible example)
-        if service_config[:compose_override]
-          apply_compose_override(local_path, service_config[:compose_override])
-        end
-
-        # Perform build/deploy actions if the repo was updated/cloned or forced
-        if repo_updated_or_cloned || service_config[:force_update]
-          # Special case for ghost_theme - use temp folder approach
-          if name == 'ghost_theme' && service_config[:deploy_path] && service_config[:build_cmd]
-            deploy_with_temp_folder(local_path, service_config[:deploy_path], service_config[:build_cmd])
-          else
-            # Standard approach for other services
-            # Run build command if specified
-            if service_config[:build_cmd]
-              run_build_command(local_path, service_config[:build_cmd])
-            end
-
-            # Handle deployment if specified
-            if service_config[:deploy_path]
-              deploy_files(local_path, service_config[:deploy_path])
-            end
-          end
-
-          # Build Docker image if specified (e.g., bklt)
-          if service_config[:container_config]&.dig(:image_name)
-            env_file = service_config[:env_config] ? File.join(local_path, ".env") : nil
-            build_docker_image(local_path, service_config[:container_config][:image_name], env_file: env_file)
-          end
-        end # End build/deploy actions
-
-        # Manage container state (either single container or compose)
         if service_config[:container_config]
-          # Manage single Docker container
-          container_name = name # Assume container name matches service name
-          # Merge env vars from .env file into container environment
-          container_env = service_config[:container_config][:environment] || {}
-          if service_config[:env_config]
-            env_file_vars = parse_env_file(File.join(local_path, ".env"))
-            container_env = env_file_vars.merge(container_env)
-          end
-          docker_config = {
-            name: container_name,
-            image: service_config[:container_config][:image_name],
-            ports: service_config[:container_config][:ports],
-            environment: container_env,
-            cmd: service_config[:container_config][:cmd]
-            # Add volumes if needed from container_config
-          }
-          # Build image if it doesn't exist yet (e.g. first deploy with no repo changes)
-          if service_config[:container_config][:image_name] && !image_exists?(service_config[:container_config][:image_name])
-            env_file = service_config[:env_config] ? File.join(local_path, ".env") : nil
-            build_docker_image(local_path, service_config[:container_config][:image_name], env_file: env_file)
-          end
-          if repo_updated_or_cloned || service_config[:force_update] || !Core::DockerService.container_running?(container_name)
-            Core::DockerService.stop_container(container_name) if Core::DockerService.container_running?(container_name)
-            Core::DockerService.start_container(docker_config)
-          else
-            puts "Container #{container_name} is already running and up-to-date."
-          end
-        elsif use_compose || service_config[:compose_override]
-          # Manage Docker Compose services
-          compose_file_path = File.join(local_path, 'docker-compose.yml')
+          expanded_env_path = File.expand_path(env_path)
+          expanded_repo_path = "#{File.expand_path(local_path)}/"
+          raise 'Runtime environment file must be outside the Docker build context' if expanded_env_path.start_with?(expanded_repo_path)
 
-          # Run install command if it's defined and the docker-compose.yml is missing
-          if install_cmd && !File.exist?(compose_file_path)
-            puts "Docker Compose file missing. Running install command for #{name}..."
-            begin
-              run_install_command(local_path, install_cmd)
-              # Assume install command succeeded and created the file
-            rescue StandardError => e
-              puts "Install command failed for #{name}: #{e.message}"
-              puts "Cannot proceed with Docker Compose for #{name}. Manual intervention may be required in #{local_path}."
-              return # Stop processing this service if install fails
-            end
-          end
-
-          # Check if compose services are running
-          compose_running = false
-          # Only check if compose file exists
-          if File.exist?(compose_file_path)
-            Dir.chdir(local_path) do
-                stdout, _stderr, status = Open3.capture3("docker compose ps -q")
-                compose_running = status.success? && !stdout.strip.empty?
-            end
-          else
-              puts "Warning: docker-compose.yml not found in #{local_path} for service #{name}, cannot manage compose services."
-              # Skip compose management if file doesn't exist even after trying install_cmd
-              return # Stop processing this specific service
-          end
-
-          if repo_updated_or_cloned || service_config[:force_update] || !compose_running
-            # If updated, or forced, or not running, ensure they are (re)started
-            puts "Ensuring Docker Compose services are up for #{name}..."
-            # We might need down first if updating, but install script handles Sentry specifics
-            # docker_compose_down(local_path) # Maybe only if repo_updated_or_cloned?
-            docker_compose_up(local_path)
-          else
-            puts "Docker Compose services for #{name} are already running."
+          legacy_env_path = File.join(local_path, '.env')
+          if File.file?(legacy_env_path) || File.symlink?(legacy_env_path)
+            File.delete(legacy_env_path)
+            puts "Removed legacy environment file from Docker build context: #{legacy_env_path}"
+          elsif File.exist?(legacy_env_path)
+            raise "Legacy environment path is not a file: #{legacy_env_path}"
           end
         end
+      end
 
-        # Execute after_deploy actions if repo was updated/cloned or forced
-        if (repo_updated_or_cloned || service_config[:force_update]) && service_config[:after_deploy]
-          if service_config[:after_deploy][:type] == 'restart_service'
-            Core::DockerService.restart_container(service_config[:after_deploy][:service])
-          end
+      compose_override_path = nil
+      compose_override_changed = false
+      if service_config[:compose_override]
+        compose_override_path = File.join(local_path, 'compose.override.yml')
+        compose_override_changed = apply_compose_override(local_path, service_config[:compose_override])
+      end
+
+      head = current_head(local_path)
+      desired_state = deployment_state(
+        service_config,
+        head,
+        env_path: env_path,
+        compose_override_path: compose_override_path
+      )
+      deployment_needed = repo_updated_or_cloned || service_config[:force_update] ||
+                          deployment_required?(service_config, desired_state)
+
+      if deployment_needed
+        if name == 'ghost_theme' && service_config[:deploy_path] && service_config[:build_cmd]
+          deploy_with_temp_folder(local_path, service_config[:deploy_path], service_config[:build_cmd])
+        else
+          run_build_command(local_path, service_config[:build_cmd]) if service_config[:build_cmd]
+          deploy_files(local_path, service_config[:deploy_path]) if service_config[:deploy_path]
         end
 
-      end # End if repo_exists
+        if service_config[:container_config]&.dig(:image_name)
+          build_docker_image(local_path, service_config[:container_config][:image_name])
+        end
+      end
+
+      if service_config[:container_config]
+        container_name = name
+        container_config = service_config[:container_config]
+        image_name = container_config[:image_name]
+        docker_config = {
+          name: container_name,
+          image: image_name,
+          ports: container_config[:ports],
+          volumes: container_config[:volumes],
+          env_file: env_path,
+          environment: container_config[:environment] || {},
+          cmd: container_config[:cmd],
+          healthcheck: container_config[:healthcheck],
+          log_driver: container_config.fetch(:log_driver, 'local'),
+          log_options: container_config.fetch(:log_options, { 'max-size' => '10m', 'max-file' => '3' })
+        }
+
+        build_docker_image(local_path, image_name) if image_name && !image_exists?(image_name)
+
+        container_running = Core::DockerService.container_running?(container_name)
+        health_status = if container_running && docker_config[:healthcheck]
+                          Core::DockerService.container_health_status(container_name)
+                        end
+        healthcheck_missing = health_status == 'none'
+        healthcheck_unhealthy = health_status == 'unhealthy'
+        logging_noncompliant = container_running &&
+                               !Core::DockerService.container_logging_compliant?(container_name, docker_config)
+        image_mismatch = container_running && image_name &&
+                         !Core::DockerService.container_uses_image?(container_name, image_name)
+        recreate = deployment_needed || env_changed || !container_running || healthcheck_missing ||
+                   healthcheck_unhealthy || logging_noncompliant || image_mismatch
+
+        if recreate
+          puts "Recreating #{container_name} to apply its healthcheck." if healthcheck_missing
+          puts "Recreating unhealthy container #{container_name}." if healthcheck_unhealthy
+          puts "Recreating #{container_name} to apply bounded logging." if logging_noncompliant
+          puts "Recreating #{container_name} to use the successfully built image." if image_mismatch
+          Core::DockerService.stop_container(container_name)
+          Core::DockerService.start_container(docker_config)
+        else
+          puts "Container #{container_name} is already running and up-to-date."
+        end
+
+        if docker_config[:healthcheck]
+          readiness_status = Core::DockerService.wait_for_healthy(
+            container_name,
+            timeout: docker_config[:healthcheck].fetch(
+              :readiness_timeout,
+              Core::DockerService::HEALTH_READINESS_TIMEOUT
+            ),
+            interval: docker_config[:healthcheck].fetch(
+              :readiness_interval,
+              Core::DockerService::HEALTH_POLL_INTERVAL
+            )
+          )
+          unless readiness_status == 'healthy'
+            raise "Container #{container_name} failed readiness (#{readiness_status})"
+          end
+        end
+      elsif use_compose || service_config[:compose_override]
+        base_compose_path = compose_file_path(local_path)
+        if install_cmd && !base_compose_path
+          puts "Docker Compose file missing. Running install command for #{name}..."
+          run_install_command(local_path, install_cmd)
+          base_compose_path = compose_file_path(local_path)
+        end
+        raise "Docker Compose file not found in #{local_path}" unless base_compose_path
+
+        stdout, stderr, status = Dir.chdir(local_path) do
+          run_command(
+            'docker', 'compose', 'ps', '-q',
+            timeout: DOCKER_QUERY_TIMEOUT,
+            label: 'Docker Compose status'
+          )
+        end
+        raise "Docker Compose status failed for #{name}: #{stderr}" unless status.success?
+
+        compose_running = !stdout.strip.empty?
+        compose_changed = compose_override_changed || env_changed
+        if deployment_needed || compose_changed || !compose_running
+          puts "Ensuring Docker Compose services are up for #{name}..."
+          docker_compose_up(local_path, force_recreate: compose_changed)
+        else
+          puts "Docker Compose services for #{name} are already running."
+        end
+      end
+
+      if deployment_needed && service_config[:after_deploy]&.dig(:type) == 'restart_service'
+        Core::DockerService.restart_container(service_config[:after_deploy][:service])
+      end
+
+      mark_deployed(service_config, desired_state) if deployment_needed || env_changed || compose_override_changed
+      true
     end
+
+    def self.run_command(*command, timeout:, label:)
+      Core::CommandRunner.capture3(
+        *command,
+        timeout: timeout,
+        label: label
+      )
+    end
+    private_class_method :run_command
   end
 end

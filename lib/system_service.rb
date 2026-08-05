@@ -1,10 +1,17 @@
-require 'open3'
 require_relative '../config'
+require_relative 'command_runner'
+require 'shellwords'
 
 module Core
   module SystemService
+    DETECTION_TIMEOUT = 15
+
     def self.service_running?(detection_cmd)
-      stdout, stderr, status = Open3.capture3(detection_cmd)
+      stdout, _stderr, status = Core::CommandRunner.capture3(
+        detection_cmd,
+        timeout: DETECTION_TIMEOUT,
+        label: 'System service detection'
+      )
       return false unless status.success?
 
       !stdout.strip.empty?
@@ -12,7 +19,11 @@ module Core
 
     def self.start_service(start_cmd)
       puts "Starting service with command: #{start_cmd}..."
-      system("nohup #{start_cmd} > /dev/null 2>&1 &")
+      command = start_cmd.is_a?(Array) ? start_cmd : Shellwords.split(start_cmd)
+      Core::CommandRunner.spawn_detached(
+        *command,
+        label: 'System service startup'
+      )
 
       # Give it a moment to start
       sleep(2)

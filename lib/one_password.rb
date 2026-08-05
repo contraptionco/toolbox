@@ -1,11 +1,17 @@
 require 'json'
-require 'open3'
 require_relative '../config'
+require_relative 'command_runner'
 
 module Core
   module OnePassword
+    COMMAND_TIMEOUT = 30
+
     def self.logged_in?
-      stdout, stderr, status = Open3.capture3('op whoami')
+      _stdout, _stderr, status = Core::CommandRunner.capture3(
+        'op', 'whoami',
+        timeout: COMMAND_TIMEOUT,
+        label: '1Password authentication check'
+      )
       status.success?
     end
 
@@ -17,9 +23,14 @@ module Core
     end
 
     def self.get_item(item_name, field_name)
-      cmd = "op item get \"#{item_name}\" --vault \"#{Config::OP_VAULT}\" --fields \"#{field_name}\" --reveal"
-
-      stdout, stderr, status = Open3.capture3(cmd)
+      stdout, stderr, status = Core::CommandRunner.capture3(
+        'op', 'item', 'get', item_name,
+        '--vault', Config::OP_VAULT,
+        '--fields', field_name,
+        '--reveal',
+        timeout: COMMAND_TIMEOUT,
+        label: '1Password item lookup'
+      )
       raise "Error fetching 1Password item: #{stderr}" unless status.success?
 
       stdout.strip

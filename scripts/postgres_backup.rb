@@ -1,9 +1,9 @@
 require 'fileutils'
-require 'open3'
 require 'shellwords'
 require 'time'
 
 require_relative '../config'
+require_relative '../lib/command_runner'
 require_relative '../lib/docker_service'
 require_relative '../lib/one_password'
 
@@ -19,6 +19,8 @@ module Scripts
     AWS_SECRET_KEY_FIELD = 'AWS_SECRET_ACCESS_KEY'
     AWS_REGION_FIELD = 'AWS_REGION'
     AWS_BUCKET_FIELD = 'S3_BUCKET'
+    EXPORT_TIMEOUT = 3600
+    UPLOAD_TIMEOUT = 3600
 
     def self.run
       new.run
@@ -119,13 +121,18 @@ module Scripts
 
       command = <<~CMD
         set -euo pipefail
-        docker exec -i -e PGPASSWORD=#{Shellwords.escape(postgres_password)} #{Shellwords.escape(postgres_container_name)} pg_dumpall -U #{Shellwords.escape(postgres_user)} | gzip -c > #{Shellwords.escape(dump_path)}
+        docker exec -i -e PGPASSWORD #{Shellwords.escape(postgres_container_name)} pg_dumpall -U #{Shellwords.escape(postgres_user)} | gzip -c > #{Shellwords.escape(dump_path)}
       CMD
 
       started_at = Time.now
       stdout = ''
       stderr = ''
-      stdout, stderr, status = Open3.capture3('bash', '-lc', command)
+      stdout, stderr, status = Core::CommandRunner.capture3(
+        'bash', '-lc', command,
+        env: { 'PGPASSWORD' => postgres_password },
+        timeout: EXPORT_TIMEOUT,
+        label: 'Postgres export'
+      )
 
       unless status.success?
         log(:error, "pg_dumpall failed: #{stderr.strip}")
@@ -153,7 +160,12 @@ module Scripts
 
       env = aws_credentials
       started_at = Time.now
-      stdout, stderr, status = Open3.capture3(env, 'aws', 's3', 'cp', dump_path, destination, '--only-show-errors')
+      stdout, stderr, status = Core::CommandRunner.capture3(
+        'aws', 's3', 'cp', dump_path, destination, '--only-show-errors',
+        env: env,
+        timeout: UPLOAD_TIMEOUT,
+        label: 'Postgres backup upload'
+      )
       unless status.success?
         log(:error, "AWS upload failed: #{stderr.strip}")
         raise "[PostgresBackup] Failed to upload to S3 (status #{status.exitstatus})."
@@ -242,4 +254,3 @@ module Scripts
     end
   end
 end
-

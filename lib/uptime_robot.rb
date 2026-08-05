@@ -5,6 +5,10 @@ require_relative 'one_password'
 
 module Core
   module UptimeRobot
+    OPEN_TIMEOUT = 5
+    READ_TIMEOUT = 10
+    WRITE_TIMEOUT = 5
+
     def self.report
       # Skip if Uptime Robot is disabled in config
       return true unless Config.const_defined?(:UPTIME_ROBOT) && !Config::UPTIME_ROBOT.nil?
@@ -26,7 +30,12 @@ module Core
 
         # Send the ping
         uri = URI(url)
-        response = Net::HTTP.get_response(uri)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = uri.scheme == 'https'
+        http.open_timeout = OPEN_TIMEOUT
+        http.read_timeout = READ_TIMEOUT
+        http.write_timeout = WRITE_TIMEOUT if http.respond_to?(:write_timeout=)
+        response = http.request(Net::HTTP::Get.new(uri.request_uri))
 
         if response.code.to_i >= 200 && response.code.to_i < 300
           puts "Successfully reported to Uptime Robot (#{response.code})"

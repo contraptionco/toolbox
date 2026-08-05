@@ -1,5 +1,8 @@
 *.log
+*.log.*
 log_files.yml
 .DS_Store
-ghost_backup.lock.txt
-ghost_backup.last_success.txt
+*_backup.lock.txt
+*_backup.last_success.txt
+.heartbeat.lock*
+.runtime/

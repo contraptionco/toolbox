@@ -1,0 +1,19 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4.1'
+      - name: Run unit tests
+        run: ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
+      - name: Check heartbeat syntax
+        run: zsh -n heartbeat.sh

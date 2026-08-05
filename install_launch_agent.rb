@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+require 'fileutils'
 require_relative 'config'
 
 # Ensure required directories exist
@@ -13,7 +14,7 @@ puts "Creating LaunchAgent for Toolbox heartbeat..."
 # Create LaunchAgents directory if it doesn't exist
 unless Dir.exist?(launch_agents_dir)
   puts "Creating LaunchAgents directory: #{launch_agents_dir}"
-  Dir.mkdir(launch_agents_dir)
+  FileUtils.mkdir_p(launch_agents_dir)
 end
 
 # Create the plist content
@@ -33,15 +34,15 @@ plist_content = <<~XML
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>#{toolbox_dir}/heartbeat.log</string>
+    <string>/dev/null</string>
     <key>StandardErrorPath</key>
-    <string>#{toolbox_dir}/heartbeat.log</string>
+    <string>/dev/null</string>
     <key>WorkingDirectory</key>
     <string>#{toolbox_dir}</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>#{home_dir}/.asdf/shims:#{home_dir}/.asdf/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>TOOLBOX_REPO_DIR</key>
         <string>#{toolbox_dir}</string>
         <key>HOME</key>
@@ -59,8 +60,21 @@ XML
 
 plist_path = "#{launch_agents_dir}/co.contraption.toolbox.heartbeat.plist"
 
-# Write the plist file
-File.write(plist_path, plist_content)
+# The plist contains the 1Password service-account token after setup, so never
+# create or replace it with the process umask's usual world-readable mode.
+temporary_path = "#{plist_path}.tmp-#{Process.pid}"
+begin
+  File.open(temporary_path, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |file|
+    file.write(plist_content)
+    file.flush
+    file.fsync
+  end
+  File.chmod(0o600, temporary_path)
+  File.rename(temporary_path, plist_path)
+  File.chmod(0o600, plist_path)
+ensure
+  File.delete(temporary_path) if File.exist?(temporary_path)
+end
 puts "LaunchAgent plist written to: #{plist_path}"
 
 puts "\nImportant: Before loading the LaunchAgent, edit the plist file to add your 1Password service account token:"

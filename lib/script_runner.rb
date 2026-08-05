@@ -1,32 +1,47 @@
-require 'open3'
 require_relative '../config'
+require_relative 'command_runner'
 
 module Core
   module ScriptRunner
+    SHELL_TIMEOUT = 3600
+
     def self.run_scripts
-      return unless Config.const_defined?(:SCRIPTS)
+      return [] unless Config.const_defined?(:SCRIPTS)
+
+      failures = []
 
       Config::SCRIPTS.each do |script_config|
         next if script_config[:enabled] == false
 
         puts "Running script: #{script_config[:name]}..."
 
-        case script_config[:type].to_s
-        when 'shell'
-          run_shell_script(script_config)
-        when 'ruby'
-          run_ruby_script(script_config)
-        else
-          puts "Unknown script type '#{script_config[:type]}' for #{script_config[:name]}, skipping."
+        begin
+          case script_config[:type].to_s
+          when 'shell'
+            run_shell_script(script_config)
+          when 'ruby'
+            run_ruby_script(script_config)
+          else
+            raise "Unknown script type '#{script_config[:type]}'"
+          end
+        rescue StandardError => e
+          puts "Script #{script_config[:name]} failed: #{e.message}"
+          failures << { component: "script:#{script_config[:name]}", error: e }
         end
       end
+
+      failures
     end
 
     def self.run_shell_script(script_config)
       command = script_config[:command]
       raise "Shell command missing for #{script_config[:name]}" if command.to_s.strip.empty?
 
-      stdout, stderr, status = Open3.capture3(command)
+      stdout, stderr, status = Core::CommandRunner.capture3(
+        command,
+        timeout: script_config.fetch(:timeout, SHELL_TIMEOUT),
+        label: "Script #{script_config[:name]}"
+      )
       puts stdout unless stdout.strip.empty?
       raise "Script #{script_config[:name]} failed: #{stderr}" unless status.success?
     end

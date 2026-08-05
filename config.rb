@@ -6,7 +6,7 @@ module Config
   #-----------------------------------------------------------------------------------
 
   # Current username - automatically detected from system
-  USER = ENV['USER'] || Etc.getlogin || `whoami`.strip
+  USER = ENV['USER'] || Etc.getlogin || Etc.getpwuid.name
 
   # User's home directory - automatically detected
   HOME_DIR = ENV['HOME'] || "/Users/#{USER}"
@@ -18,6 +18,9 @@ module Config
   # Code repositories location - where git repos will be cloned
   # CHANGE THIS if you want to store code elsewhere
   CODE_DIR = "#{HOME_DIR}/code"
+
+  # Ignored local state for deployment markers and runtime environment files.
+  RUNTIME_DIR = File.expand_path('.runtime', __dir__)
 
   #-----------------------------------------------------------------------------------
   # NETWORK CONFIGURATION
@@ -137,6 +140,7 @@ module Config
       name: 'postcard',                                          # Service name
       repo_url: 'git@github.com:contraptionco/postcard.git',     # CHANGE THIS to your repository
       local_path: "#{CODE_DIR}/postcard",                        # Where to clone the repo
+      branch: 'main',                                            # Production deploys only from main
       # Environment configuration from 1Password
       env_config: { type: '1password', item: 'Postcard', field: 'env' },
       container_config: { # Container configuration after build
@@ -149,7 +153,16 @@ module Config
           APP_MODE: 'MULTIUSER',
           RAILS_ENV: 'production'                            # Environment setting
         },
-        cmd: 'bundle exec puma -C config/puma.rb'            # Command to run in the container
+        cmd: 'bundle exec puma -C config/puma.rb',           # Command to run in the container
+        healthcheck: {
+          test: "curl --fail --silent --show-error --max-time 4 --header 'X-Forwarded-Proto: https' http://127.0.0.1:3000/.postcard >/dev/null",
+          interval: '30s',
+          timeout: '5s',
+          retries: 3,
+          start_period: '30s',
+          readiness_timeout: 90,
+          readiness_interval: 2
+        }
       },
       auto_update: true                                      # Whether to auto-update when repo changes
     },
@@ -179,10 +192,26 @@ module Config
       # Custom docker-compose override
       compose_override: {
         services: {
+          plausible_db: {
+            logging: {
+              driver: 'local',
+              options: { 'max-size' => '10m', 'max-file' => '3' }
+            }
+          },
+          plausible_events_db: {
+            logging: {
+              driver: 'local',
+              options: { 'max-size' => '10m', 'max-file' => '3' }
+            }
+          },
           plausible: {
-            ports: ['127.0.0.1:8000:8000'] # Port mapping for the service
+            ports: ['127.0.0.1:8000:8000'], # Port mapping for the service
             # Cloudflare connects to port 8000 to serve:
             # telegraph.contraption.co
+            logging: {
+              driver: 'local',
+              options: { 'max-size' => '10m', 'max-file' => '3' }
+            }
           }
         }
       },
@@ -283,15 +312,6 @@ module Config
 
   SCRIPTS = [
     {
-      name: 'ghost_backup',                                  # Script name
-      type: 'ruby',                                          # Script type (:ruby or :shell)
-      description: 'Back up Ghost data and metadata to ghost-backup repository',
-      require: 'scripts/ghost_backup',                       # Relative path to the script file
-      class_name: 'Scripts::GhostBackup',                    # Runner class
-      method: :run,                                          # Method to execute
-      enabled: true                                          # Toggle script without removing config
-    },
-    {
       name: 'postgres_backup',
       type: 'ruby',
       description: 'Export Postgres databases and upload to S3',
@@ -299,6 +319,15 @@ module Config
       class_name: 'Scripts::PostgresBackup',
       method: :run,
       enabled: true
+    },
+    {
+      name: 'ghost_backup',                                  # Script name
+      type: 'ruby',                                          # Script type (:ruby or :shell)
+      description: 'Back up Ghost data and metadata to ghost-backup repository',
+      require: 'scripts/ghost_backup',                       # Relative path to the script file
+      class_name: 'Scripts::GhostBackup',                    # Runner class
+      method: :run,                                          # Method to execute
+      enabled: true                                          # Toggle script without removing config
     }
   ]
 
