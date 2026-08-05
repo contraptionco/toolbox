@@ -16,7 +16,9 @@ class InstallLaunchAgentTest < Minitest::Test
 
       path = File.join(home, 'Library', 'LaunchAgents', 'co.contraption.toolbox.heartbeat.plist')
       assert_equal 0o600, File.stat(path).mode & 0o777
-      assert_includes File.binread(path), 'OP_SERVICE_ACCOUNT_TOKEN'
+      plist = File.binread(path)
+      assert_includes plist, 'OP_SERVICE_ACCOUNT_TOKEN'
+      assert_match(/<key>TOOLBOX_OP_BACKEND<\/key>\s*<string>docker<\/string>/, plist)
     end
   end
 end

@@ -156,11 +156,6 @@ module Core
         cmd.concat(['--env-file', service_config[:env_file]])
       end
 
-      # Add environment variables
-      resolved_env.each do |key, value|
-        cmd.concat(['-e', "#{key}=#{value}"])
-      end
-
       # Add volumes
       service_config[:volumes]&.each do |volume|
         cmd.concat(['-v', volume])
@@ -181,26 +176,34 @@ module Core
         cmd.concat(['--health-start-period', hc[:start_period]]) if hc[:start_period]
       end
 
-      # Add image
-      cmd << service_config[:image]
+      runtime_env_path = write_runtime_environment(service_config[:name], resolved_env)
+      begin
+        cmd.concat(['--env-file', runtime_env_path]) if runtime_env_path
 
-      # Add command if specified
-      if service_config[:cmd]
-        container_command = service_config[:cmd].is_a?(Array) ? service_config[:cmd] : Shellwords.split(service_config[:cmd])
-        cmd.concat(container_command)
+        # Add image
+        cmd << service_config[:image]
+
+        # Add command if specified
+        if service_config[:cmd]
+          container_command = service_config[:cmd].is_a?(Array) ? service_config[:cmd] : Shellwords.split(service_config[:cmd])
+          cmd.concat(container_command)
+        end
+
+        # Execute the command
+        puts "Starting container: #{service_config[:name]}..."
+        _stdout, stderr, status = run(
+          *cmd,
+          timeout: ACTION_TIMEOUT,
+          label: 'Docker container start'
+        )
+      ensure
+        File.delete(runtime_env_path) if runtime_env_path && File.exist?(runtime_env_path)
       end
 
-      # Execute the command
-      puts "Starting container: #{service_config[:name]}..."
-      _stdout, stderr, status = run(
-        *cmd,
-        timeout: ACTION_TIMEOUT,
-        label: 'Docker container start'
-      )
       raise "Error starting container #{service_config[:name]}: #{stderr}" unless status.success?
 
       puts "Container #{service_config[:name]} started successfully."
-      
+
       # Execute post-start command if specified
       if service_config[:post_start_cmd]
         puts "Running post-start command for #{service_config[:name]}..."
@@ -413,6 +416,37 @@ module Core
       File.delete(temporary_path) if temporary_path && File.exist?(temporary_path)
     end
     private_class_method :write_private_marker
+
+    def self.write_runtime_environment(service_name, environment)
+      return if environment.empty?
+
+      content = environment.map do |key, value|
+        env_key = key.to_s.dup.force_encoding(Encoding::UTF_8)
+        unless env_key.valid_encoding? && env_key.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
+          raise "Invalid environment variable name for #{service_name}"
+        end
+
+        env_value = value.to_s.dup.force_encoding(Encoding::UTF_8)
+        unless env_value.valid_encoding?
+          raise "Environment variable #{env_key} for #{service_name} contains invalid UTF-8"
+        end
+        if env_value.include?("\0") || env_value.include?("\n") || env_value.include?("\r")
+          raise "Environment variable #{env_key} for #{service_name} cannot be represented safely"
+        end
+        "#{env_key}=#{env_value}"
+      end.join("\n")
+
+      safe_name = service_name.to_s.gsub(/[^A-Za-z0-9_.-]/, '_')
+      path = File.join(runtime_environment_directory, "#{safe_name}-#{Process.pid}-#{rand(1_000_000)}.env")
+      write_private_marker(path, "#{content}\n")
+      path
+    end
+    private_class_method :write_runtime_environment
+
+    def self.runtime_environment_directory
+      File.join(Config::RUNTIME_DIR, 'env', 'containers')
+    end
+    private_class_method :runtime_environment_directory
 
     def self.run(*arguments, timeout:, label:)
       Core::CommandRunner.capture3(

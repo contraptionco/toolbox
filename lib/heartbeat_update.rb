@@ -63,6 +63,7 @@ module Core
       verify_synced_main!
       status = @command_runner.run(
         RbConfig.ruby, 'toolbox.rb', mode,
+        env: toolbox_environment,
         chdir: @repo_dir,
         timeout: TOOLBOX_TIMEOUT,
         out: @stdout,
@@ -106,6 +107,11 @@ module Core
 
       log 'Installing Toolbox dependencies via asdf...'
       run!(asdf, 'install', label: 'Toolbox asdf install', timeout: ASDF_TIMEOUT)
+    end
+
+    def toolbox_environment
+      token = ENV['OP_SERVICE_ACCOUNT_TOKEN'].to_s
+      token.empty? ? {} : { 'OP_SERVICE_ACCOUNT_TOKEN' => token }
     end
 
     def find_executable(name)

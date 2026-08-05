@@ -7,8 +7,18 @@ class DockerServiceTest < Minitest::Test
 
   def test_docker_run_has_bounded_logs_and_healthcheck
     captured = nil
+    runtime_env = nil
     runner = lambda do |*arguments, **options|
       captured = [arguments, options]
+      env_paths = arguments.each_index.filter_map do |index|
+        arguments[index + 1] if arguments[index] == '--env-file'
+      end
+      runtime_path = env_paths.find { |path| path != '/runtime/postcard.env' }
+      runtime_env = {
+        path: runtime_path,
+        content: File.binread(runtime_path),
+        mode: File.stat(runtime_path).mode & 0o777
+      }
       ['container-id', '', FakeStatus.new(true)]
     end
     config = {
@@ -26,12 +36,17 @@ class DockerServiceTest < Minitest::Test
       }
     }
 
-    capture_output do
-      Core::OnePassword.stub(:resolve_env_vars, { TOKEN: 'secret' }) do
-        Core::CommandRunner.stub(:capture3, runner) do
-          Core::DockerService.start_container(config)
+    Dir.mktmpdir do |directory|
+      capture_output do
+        Core::OnePassword.stub(:resolve_env_vars, { TOKEN: 'secret' }) do
+          Core::DockerService.stub(:runtime_environment_directory, directory) do
+            Core::CommandRunner.stub(:capture3, runner) do
+              Core::DockerService.start_container(config)
+            end
+          end
         end
       end
+      refute File.exist?(runtime_env[:path])
     end
 
     command, options = captured
@@ -40,8 +55,13 @@ class DockerServiceTest < Minitest::Test
     assert_sequence command, '--log-opt', 'max-size=10m'
     assert_sequence command, '--log-opt', 'max-file=3'
     assert_sequence command, '--env-file', '/runtime/postcard.env'
+    assert_sequence command, '--env-file', runtime_env[:path]
     assert_sequence command, '--health-cmd', config[:healthcheck][:test]
     assert_sequence command, '--health-start-period', '30s'
+    refute_includes command.join(' '), 'secret'
+    assert_equal "TOKEN=secret\n", runtime_env[:content]
+    assert_equal 0o600, runtime_env[:mode]
+    assert_nil options[:env]
     assert_equal 'Docker container start', options[:label]
   end
 
@@ -71,6 +91,100 @@ class DockerServiceTest < Minitest::Test
     assert_includes lookup, '-a'
     refute commands.any? { |command| command[1] == 'stop' }
     assert commands.any? { |command| command[1] == 'rm' }
+  end
+
+  def test_runtime_environment_file_is_removed_when_docker_start_fails
+    runtime_path = nil
+    command = nil
+    runner = lambda do |*arguments, **_options|
+      command = arguments
+      env_index = arguments.each_index.find { |index| arguments[index] == '--env-file' }
+      runtime_path = arguments.fetch(env_index + 1)
+      assert File.exist?(runtime_path)
+      ['', 'daemon failed', FakeStatus.new(false)]
+    end
+    config = { name: 'fixture', image: 'fixture', environment: { TOKEN: 'secret' } }
+
+    Dir.mktmpdir do |directory|
+      raised = nil
+      output = capture_output do
+        Core::OnePassword.stub(:resolve_env_vars, { TOKEN: 'secret' }) do
+          Core::DockerService.stub(:runtime_environment_directory, directory) do
+            Core::CommandRunner.stub(:capture3, runner) do
+              raised = assert_raises(RuntimeError) { Core::DockerService.start_container(config) }
+            end
+          end
+        end
+      end
+
+      refute File.exist?(runtime_path)
+      refute_includes command.join(' '), 'secret'
+      refute_includes raised.message, 'secret'
+      refute_includes output.to_s, 'secret'
+    end
+  end
+
+  def test_invalid_utf8_secret_is_rejected_without_running_docker
+    called = false
+    runner = lambda do |*_arguments, **_options|
+      called = true
+      ['', '', FakeStatus.new(true)]
+    end
+    invalid_secret = "\xFF".b
+    config = { name: 'fixture', image: 'fixture', environment: { TOKEN: invalid_secret } }
+
+    Dir.mktmpdir do |directory|
+      raised = nil
+      output = capture_output do
+        Core::OnePassword.stub(:resolve_env_vars, { TOKEN: invalid_secret }) do
+          Core::DockerService.stub(:runtime_environment_directory, directory) do
+            Core::CommandRunner.stub(:capture3, runner) do
+              raised = assert_raises(RuntimeError) { Core::DockerService.start_container(config) }
+            end
+          end
+        end
+      end
+
+      refute called
+      assert_empty Dir.children(directory)
+      assert_equal 'Environment variable TOKEN for fixture contains invalid UTF-8', raised.message
+      refute_includes output.to_s.b, invalid_secret
+    end
+  end
+
+  def test_runtime_environment_file_is_removed_before_post_start_command
+    runtime_path = nil
+    runner = lambda do |*arguments, **_options|
+      if arguments.first == 'docker'
+        env_index = arguments.each_index.find { |index| arguments[index] == '--env-file' }
+        runtime_path = arguments.fetch(env_index + 1)
+        assert File.exist?(runtime_path)
+      else
+        refute File.exist?(runtime_path)
+      end
+      ['', '', FakeStatus.new(true)]
+    end
+    config = {
+      name: 'fixture',
+      image: 'fixture',
+      environment: { TOKEN: 'secret' },
+      post_start_cmd: 'true'
+    }
+
+    Dir.mktmpdir do |directory|
+      capture_output do
+        Core::OnePassword.stub(:resolve_env_vars, { TOKEN: 'secret' }) do
+          Core::DockerService.stub(:runtime_environment_directory, directory) do
+            Core::DockerService.stub(:sleep, nil) do
+              Core::CommandRunner.stub(:capture3, runner) do
+                assert Core::DockerService.start_container(config)
+              end
+            end
+          end
+        end
+      end
+      refute File.exist?(runtime_path)
+    end
   end
 
   def test_readiness_poll_waits_for_healthy

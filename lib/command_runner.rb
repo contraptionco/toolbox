@@ -8,6 +8,7 @@ module Core
     IO_JOIN_GRACE = 1
     READ_CHUNK_SIZE = 16 * 1024
     TRUNCATION_MARKER = "\n[output truncated]\n".b
+    SCRUBBED_ENV_KEYS = %w[OP_SERVICE_ACCOUNT_TOKEN].freeze
 
     class TimeoutError < StandardError; end
     class StartError < StandardError; end
@@ -18,6 +19,7 @@ module Core
       raise ArgumentError, 'capture_limit must be positive' unless capture_limit.positive?
 
       display_label = safe_label(label)
+      process_env = scrubbed_environment(env)
       options = { pgroup: true }
       options[:chdir] = chdir if chdir
       deadline = monotonic_time + timeout
@@ -26,7 +28,7 @@ module Core
       status = nil
       timed_out = false
 
-      Open3.popen3(env, *command, **options) do |stdin, stdout, stderr, wait_thread|
+      Open3.popen3(process_env, *command, **options) do |stdin, stdout, stderr, wait_thread|
         stdout_reader = Thread.new { read_bounded(stdout, capture_limit) }
         stderr_reader = Thread.new { read_bounded(stderr, capture_limit) }
         stdin_writer = Thread.new do
@@ -76,9 +78,10 @@ module Core
                  stdin: File::NULL, out: $stdout, err: $stderr, label: nil)
       validate_command!(command, timeout)
       display_label = safe_label(label)
+      process_env = scrubbed_environment(env)
       options = { pgroup: true, in: stdin, out: out, err: err }
       options[:chdir] = chdir if chdir
-      pid = Process.spawn(env, *command, **options)
+      pid = Process.spawn(process_env, *command, **options)
       wait_thread = Process.detach(pid)
 
       unless wait_thread.join(timeout)
@@ -97,9 +100,10 @@ module Core
       raise ArgumentError, 'command is required' if command.empty?
 
       display_label = safe_label(label)
+      process_env = scrubbed_environment(env)
       options = { pgroup: true, in: File::NULL, out: out, err: err }
       options[:chdir] = chdir if chdir
-      pid = Process.spawn(env, *command, **options)
+      pid = Process.spawn(process_env, *command, **options)
       Process.detach(pid)
       pid
     rescue SystemCallError => e
@@ -186,6 +190,11 @@ module Core
       label.to_s.strip.empty? ? 'Command' : label.to_s
     end
     private_class_method :safe_label
+
+    def self.scrubbed_environment(environment)
+      SCRUBBED_ENV_KEYS.to_h { |key| [key, nil] }.merge(environment)
+    end
+    private_class_method :scrubbed_environment
 
     def self.monotonic_time
       Process.clock_gettime(Process::CLOCK_MONOTONIC)

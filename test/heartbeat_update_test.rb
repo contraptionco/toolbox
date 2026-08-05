@@ -61,8 +61,14 @@ class HeartbeatUpdateTest < Minitest::Test
       stderr: StringIO.new
     )
 
-    updater.stub(:find_executable, nil) do
-      assert updater.update_and_run
+    previous_token = ENV['OP_SERVICE_ACCOUNT_TOKEN']
+    ENV['OP_SERVICE_ACCOUNT_TOKEN'] = 'fixture-service-token'
+    begin
+      updater.stub(:find_executable, nil) do
+        assert updater.update_and_run
+      end
+    ensure
+      previous_token.nil? ? ENV.delete('OP_SERVICE_ACCOUNT_TOKEN') : ENV['OP_SERVICE_ACCOUNT_TOKEN'] = previous_token
     end
 
     commands = runner.commands.map(&:first)
@@ -74,6 +80,7 @@ class HeartbeatUpdateTest < Minitest::Test
     assert_equal Core::HeartbeatUpdate::TOOLBOX_TIMEOUT, runner.run_options.last[:timeout]
     assert_operator Core::HeartbeatUpdate::TOOLBOX_TIMEOUT, :>=, 24 * 60 * 60
     assert_equal ['code_changed'], runner.run_options.first.last(1)
+    assert_equal({ 'OP_SERVICE_ACCOUNT_TOKEN' => 'fixture-service-token' }, runner.run_options.last[:env])
   end
 
   def test_refuses_dirty_checkout_before_switch_or_pull

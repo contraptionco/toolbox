@@ -41,6 +41,29 @@ class CommandRunnerTest < Minitest::Test
     assert_includes stdout, 'output truncated'
   end
 
+  def test_service_account_token_is_scrubbed_unless_explicitly_passed
+    key = 'OP_SERVICE_ACCOUNT_TOKEN'
+    previous = ENV[key]
+    ENV[key] = 'parent-secret'
+
+    stdout, = Core::CommandRunner.capture3(
+      RbConfig.ruby, '-e', 'print ENV.fetch("OP_SERVICE_ACCOUNT_TOKEN", "missing")',
+      timeout: 2,
+      label: 'Environment scrub fixture'
+    )
+    assert_equal 'missing', stdout
+
+    stdout, = Core::CommandRunner.capture3(
+      RbConfig.ruby, '-e', 'print ENV.fetch("OP_SERVICE_ACCOUNT_TOKEN", "missing")',
+      env: { key => 'explicit-secret' },
+      timeout: 2,
+      label: 'Explicit environment fixture'
+    )
+    assert_equal 'explicit-secret', stdout
+  ensure
+    previous.nil? ? ENV.delete(key) : ENV[key] = previous
+  end
+
   def test_timeout_kills_a_descendant_that_ignores_term
     Dir.mktmpdir do |directory|
       parent_info = File.join(directory, 'parent')

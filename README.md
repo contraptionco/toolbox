@@ -172,6 +172,7 @@ To keep your server updated automatically:
    ```
 3. Configure the plist file:
    - Set your 1Password service account token in the `OP_SERVICE_ACCOUNT_TOKEN` field
+   - Keep `TOOLBOX_OP_BACKEND` set to `docker` on macOS hosts where the native `op` daemon is unreliable
    - Update other paths if necessary
 4. Load the LaunchAgent: `launchctl load ~/Library/LaunchAgents/co.contraption.toolbox.heartbeat.plist`
 

@@ -49,6 +49,8 @@ plist_content = <<~XML
         <string>#{home_dir}</string>
         <key>OP_SERVICE_ACCOUNT_TOKEN</key>
         <string>FILL_THIS_IN</string>
+        <key>TOOLBOX_OP_BACKEND</key>
+        <string>docker</string>
     </dict>
     <key>NSAllowsLocalNetworking</key>
     <true/>
