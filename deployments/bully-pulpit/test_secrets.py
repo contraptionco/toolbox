@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('bully_secrets', Path(__file__).with_name('secrets.py'))
 secrets = importlib.util.module_from_spec(SPEC)
@@ -27,6 +29,26 @@ class SecretBoundaryTest(unittest.TestCase):
     def test_duplicate_or_invalid_keys_are_not_silently_overwritten(self):
         for value in ['NAME=first\nNAME=second\n', 'INVALID NAME=value\n']:
             with self.assertRaises(ValueError): secrets.parse_env(value)
+
+    def test_credential_helpers_have_unique_transient_names_and_no_docker_logs(self):
+        result = SimpleNamespace(returncode=0, stdout=b'{"fields": []}')
+        with patch.object(secrets.subprocess, 'run', return_value=result) as run:
+            for _ in range(2):
+                self.assertEqual({'fields': []}, secrets.read_item('fixture-service-token'))
+
+        names = []
+        for call in run.call_args_list:
+            args = call.args[0]
+            name = args[args.index('--name') + 1]
+            self.assertRegex(name, r'^toolbox-op-bully-pulpit-secrets-[0-9a-f]{32}$')
+            names.append(name)
+            self.assertIn('--rm', args)
+            self.assertIn('--log-driver=none', args)
+            self.assertNotIn('fixture-service-token', args)
+            self.assertEqual('fixture-service-token', call.kwargs['env']['OP_SERVICE_ACCOUNT_TOKEN'])
+            self.assertTrue(call.kwargs['capture_output'])
+            self.assertEqual(60, call.kwargs['timeout'])
+        self.assertNotEqual(*names)
 
 
 if __name__ == '__main__': unittest.main()

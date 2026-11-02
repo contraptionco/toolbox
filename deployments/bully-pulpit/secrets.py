@@ -7,6 +7,7 @@ import plistlib
 import subprocess
 import sys
 from urllib.parse import unquote, urlsplit
+import uuid
 
 ROOT = Path('/Users/philip/data/bully-pulpit-local')
 VAULT = 'ao6pgbthqnu4expub6pdb4z3oa'
@@ -57,6 +58,18 @@ def write_private(path, text):
     os.replace(temporary, path)
 
 
+def read_item(token):
+    # Dashboard classifies this prefix as transient and never offers its logs.
+    name = 'toolbox-op-bully-pulpit-secrets-' + uuid.uuid4().hex
+    result = subprocess.run(
+        ['docker', 'run', '--rm', '-i', '--name', name, '--log-driver=none', '--env', 'OP_SERVICE_ACCOUNT_TOKEN',
+         IMAGE, 'op', '--cache=false', 'item', 'get', ITEM, '--vault', VAULT, '--format', 'json'],
+        env={**os.environ, 'OP_SERVICE_ACCOUNT_TOKEN': token}, capture_output=True, timeout=60,
+    )
+    if result.returncode: raise ValueError('The dedicated 1Password item is not readable')
+    return json.loads(result.stdout)
+
+
 def main():
     # Reuse the existing read-only service account, without printing/copying its
     # token into app configuration or granting the application vault access.
@@ -64,13 +77,7 @@ def main():
     with path.open('rb') as file: agent = plistlib.load(file)
     token = agent.get('EnvironmentVariables', {}).get('OP_SERVICE_ACCOUNT_TOKEN')
     if not token: raise ValueError('Toolbox 1Password service account is unavailable')
-    result = subprocess.run(
-        ['docker', 'run', '--rm', '-i', '--log-driver=none', '--env', 'OP_SERVICE_ACCOUNT_TOKEN',
-         IMAGE, 'op', '--cache=false', 'item', 'get', ITEM, '--vault', VAULT, '--format', 'json'],
-        env={**os.environ, 'OP_SERVICE_ACCOUNT_TOKEN': token}, capture_output=True, timeout=60,
-    )
-    if result.returncode: raise ValueError('The dedicated 1Password item is not readable')
-    item = json.loads(result.stdout)
+    item = read_item(token)
     fields = {field.get('label'): field.get('value', '') for field in item['fields']}
     app = parse_env(fields['ENV'])
     postgres = parse_env(fields['POSTGRES_ENV'])
