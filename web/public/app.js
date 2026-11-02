@@ -89,13 +89,33 @@
     $('reconnect').hidden = !session;
   }
   function overall(label, state) {
+    if ($('overall-status').textContent === label) return;
     $('overall-status').replaceChildren(dot(state), document.createTextNode(label));
+  }
+  function statusLoading(loading) {
+    const firstReading = loading && !snapshot;
+    document.body.classList.toggle('is-loading', firstReading);
+    document.querySelectorAll('[data-loading-region]').forEach((node) => node.setAttribute('aria-busy', String(firstReading)));
+    $('refresh').disabled = loading || !authenticated || !active || !navigator.onLine;
+    set('refresh', loading ? (snapshot ? 'Refreshing…' : 'Loading…') : 'Refresh ↻');
+    if (firstReading) {
+      overall('Reading the host…', 'loading');
+      set('last-updated', 'The first reading takes a few seconds');
+      set('deploy-badge', 'Loading'); $('deploy-badge').className = 'badge neutral';
+      set('deploy-title', 'Reading the heartbeat');
+    }
+  }
+  function logLoading(loading, firstReading = false) {
+    $('log-output').setAttribute('aria-busy', String(loading && firstReading));
+    $('log-status').classList.toggle('is-fetching', loading);
+    if (loading && firstReading) set('log-status', 'Reading output…');
   }
   function clearSensitive() {
     epoch += 1;
     statusRequest?.abort();
     logRequest?.abort();
     snapshot = null;
+    statusLoading(false); logLoading(false);
     overall('Waiting for a live connection', 'neutral');
     lastLogText = '';
     lastLogSource = '';
@@ -281,7 +301,7 @@
       $('log-source').disabled = sources.length === 0;
       $('pause-logs').disabled = sources.length === 0;
       if (!sources.length) {
-        logRequest?.abort(); logRequest = null; clearTimeout(logTimer);
+        logRequest?.abort(); logRequest = null; clearTimeout(logTimer); logLoading(false);
         lastLogText = ''; lastLogSource = ''; $('copy-logs').disabled = true;
         set('log-output', 'No log sources are currently available.'); set('log-status', 'Unavailable');
       }
@@ -293,7 +313,7 @@
     if (!active || !authenticated || document.hidden || !navigator.onLine || statusRequest) return;
     const requestEpoch = epoch;
     const controller = new AbortController(); statusRequest = controller;
-    $('refresh').disabled = true;
+    statusLoading(true);
     try {
       const data = await request('/api/status', controller);
       if (requestEpoch !== epoch) return;
@@ -311,7 +331,7 @@
       }
     } finally {
       if (statusRequest === controller) statusRequest = null;
-      $('refresh').disabled = false;
+      statusLoading(false);
       if (active && authenticated) statusTimer = setTimeout(refreshStatus, 15000);
     }
   }
@@ -319,6 +339,7 @@
     logRequest?.abort(); logRequest = null;
     lastLogSource = ''; lastLogText = '';
     $('copy-logs').disabled = true;
+    logLoading(false);
     set('log-output', paused ? 'Resume to read this source.' : 'Reading recent output…');
     refreshLogs();
   }
@@ -329,6 +350,7 @@
     if (!source) return;
     const requestEpoch = epoch;
     const controller = new AbortController(); logRequest = controller;
+    logLoading(true, !lastLogText || lastLogSource !== source);
     try {
       const data = await request(`/api/logs?source=${encodeURIComponent(source)}&lines=100`, controller);
       if (requestEpoch !== epoch || source !== $('log-source').value || controller !== logRequest || paused) return;
@@ -350,7 +372,7 @@
         set('log-status', 'Unable to refresh · retrying');
       }
     } finally {
-      if (logRequest === controller) logRequest = null;
+      if (logRequest === controller) { logRequest = null; logLoading(false); }
       if (active && authenticated && !paused) logTimer = setTimeout(refreshLogs, 5000);
     }
   }
@@ -370,7 +392,7 @@
     paused = !paused;
     $('pause-logs').setAttribute('aria-pressed', String(paused));
     set('pause-logs', paused ? 'Resume' : 'Pause');
-    if (paused) { clearTimeout(logTimer); logRequest?.abort(); logRequest = null; set('log-status', 'Paused'); }
+    if (paused) { clearTimeout(logTimer); logRequest?.abort(); logRequest = null; logLoading(false); set('log-status', 'Paused'); }
     else refreshLogs();
   });
   $('copy-logs').addEventListener('click', async () => {

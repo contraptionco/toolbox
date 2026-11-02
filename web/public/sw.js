@@ -1,8 +1,8 @@
 'use strict';
 // Only generic, static assets are stored. Navigations, host metrics, logs and
 // Cloudflare authentication responses are NEVER cached or replayed offline.
-const CACHE = 'toolbox-shell-v1';
-const ASSETS = ['/offline.html', '/style.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png'];
+const CACHE = 'toolbox-shell-v2';
+const ASSETS = ['/offline.html', '/style.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/logo.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);

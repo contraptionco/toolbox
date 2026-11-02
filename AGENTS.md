@@ -8,11 +8,18 @@ Postcard and its PostgreSQL database are the critical application services on th
 Mac. Bully Pulpit is also critical, but runs on Vercel; preserve its local
 checkouts and development work without treating them as Mac-hosted production.
 Ghost, Booklet, Junk Drawer, Plausible (including its dedicated PostgreSQL and
-ClickHouse databases), and Netdata are retired. Do not recreate their services or
-data, Ghost backup automation, or Netdata startup/log-rotation jobs during
-maintenance. Existing Netdata files and history are preserved. Existing domain
-redirects remain intentional. Preserve remote backup history unless the user
-authorizes removal.
+ClickHouse databases), Netdata, and the Signal proxy are retired. Do not recreate
+their services or data, Ghost backup automation, or Netdata startup/log-rotation
+jobs during maintenance. Signal proxy refers to the `signal` Docker container
+using `bbernhard/signal-cli-rest-api` and its dedicated `data/signal` directory;
+preserve personal Signal application data. Existing Netdata files and history are
+preserved. Existing domain redirects remain intentional. Preserve remote backup
+history unless the user authorizes removal.
+
+Netdata's user LaunchAgent and log-rotation job are disabled. A stale root-owned
+`homebrew.mxcl.netdata` launch registration remains with a nonexistent executable
+containing `@@HOMEBREW_PREFIX@@`; disabling/unloading that registration needs
+administrator access. Do not repair its executable or restart it.
 
 Cloudflare manages this tunnel's active ingress remotely. The remote configuration
 overrides `config.yml` and includes additional routes. For an authorized route
@@ -75,6 +82,7 @@ LaunchAgent state, which can contain secrets.
   development clone. This binds to **127.0.0.1:4179** and uses synthetic data only.
   There is no auth-bypass mode that reads the production host. Stop demo servers
   after testing. Match Bully Pulpit's typography, warm colors and square controls.
+  Reuse the README's `assets/toolbox.svg` logo rather than inventing a wordmark.
 
 ## Use a separate checkout
 
