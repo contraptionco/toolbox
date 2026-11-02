@@ -234,9 +234,15 @@ existing application checkouts for local modifications and branch drift. A
 source-validation rejection leaves its existing container running and reports a failure.
 Do not remove local files or relax the checks just to silence that failure.
 
-Disk usage at or above 90% blocks the heartbeat before service reconciliation and
-scheduled backups. Diagnose disk pressure separately; do not lower this guard or
-prune production volumes as part of development.
+On macOS, the disk check accounts for storage the operating system can reclaim,
+while requiring at least 20 GiB to be immediately free before work starts. It
+blocks at 90% effective usage, or when that physical reserve is unavailable, and
+still warns about high raw usage. If macOS capacity information is unavailable,
+the original `df` percentage limit applies along with the physical reserve.
+Other operating systems retain the 90% `df` limit. The reserve is a starting
+floor, not a guarantee that every backup or build fits; disk usage is checked
+again after the run. Diagnose disk pressure separately; do not lower these
+guards or prune production volumes as part of development.
 
 ## Security: Automatic screen locking
 
