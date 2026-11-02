@@ -1,13 +1,23 @@
 #!/usr/bin/env ruby
+require_relative 'lib/production_guard'
+
+begin
+  toolbox_dir = Core::ProductionGuard.require_production!(__dir__, arguments: ARGV)
+rescue Core::ProductionGuard::Error => e
+  warn "LaunchAgent installation refused: #{e.message}"
+  exit 1
+end
+
 require 'fileutils'
+require 'cgi'
 require_relative 'config'
 
 # Ensure required directories exist
 user = Config::USER
 home_dir = Config::HOME_DIR
-code_dir = Config::CODE_DIR
-toolbox_dir = "#{code_dir}/toolbox"
 launch_agents_dir = "#{home_dir}/Library/LaunchAgents"
+escaped_home = CGI.escapeHTML(home_dir)
+escaped_toolbox = CGI.escapeHTML(toolbox_dir)
 
 puts "Creating LaunchAgent for Toolbox heartbeat..."
 
@@ -27,7 +37,7 @@ plist_content = <<~XML
     <string>co.contraption.toolbox.heartbeat</string>
     <key>ProgramArguments</key>
     <array>
-        <string>#{toolbox_dir}/heartbeat.sh</string>
+        <string>#{escaped_toolbox}/heartbeat.sh</string>
     </array>
     <key>StartInterval</key>
     <integer>60</integer>
@@ -38,15 +48,17 @@ plist_content = <<~XML
     <key>StandardErrorPath</key>
     <string>/dev/null</string>
     <key>WorkingDirectory</key>
-    <string>#{toolbox_dir}</string>
+    <string>#{escaped_toolbox}</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>#{home_dir}/.asdf/shims:#{home_dir}/.asdf/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>#{escaped_home}/.asdf/shims:#{escaped_home}/.asdf/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>TOOLBOX_REPO_DIR</key>
-        <string>#{toolbox_dir}</string>
+        <string>#{escaped_toolbox}</string>
+        <key>TOOLBOX_PRODUCTION_REPO_DIR</key>
+        <string>#{escaped_toolbox}</string>
         <key>HOME</key>
-        <string>#{home_dir}</string>
+        <string>#{escaped_home}</string>
         <key>OP_SERVICE_ACCOUNT_TOKEN</key>
         <string>FILL_THIS_IN</string>
         <key>TOOLBOX_OP_BACKEND</key>

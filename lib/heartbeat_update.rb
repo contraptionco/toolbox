@@ -1,3 +1,17 @@
+require_relative 'production_guard'
+
+# The CLI guard runs before loading config through DiskMonitor. Requiring this
+# file for isolated unit tests does not invoke a production entrypoint.
+if $PROGRAM_NAME == __FILE__
+  begin
+    Core::ProductionGuard.validate_directory!(File.expand_path('..', __dir__))
+    Core::ProductionGuard.validate_directory!(ARGV.fetch(0))
+  rescue StandardError => e
+    warn "Heartbeat update refused: #{e.message}"
+    exit 1
+  end
+end
+
 require 'rbconfig'
 require_relative 'command_runner'
 require_relative 'disk_monitor'
@@ -24,6 +38,8 @@ module Core
     end
 
     def update
+      verify_main!
+      ensure_clean!
       disk_status = @disk_monitor.check
       raise "Disk usage is #{disk_status.percent_used}%; refusing Toolbox update" if disk_status.critical?
 
@@ -31,10 +47,6 @@ module Core
       git!('fetch', '--no-tags', 'origin', "refs/heads/#{BRANCH}:#{REMOTE_REF}", label: 'Toolbox Git fetch')
       ensure_clean!
 
-      unless current_branch == BRANCH
-        log "Switching Toolbox checkout to #{BRANCH}..."
-        git!('switch', BRANCH, label: 'Toolbox Git switch')
-      end
       verify_main!
 
       upstream = git!('rev-parse', REMOTE_REF, label: 'Toolbox upstream lookup').strip
@@ -62,7 +74,7 @@ module Core
       mode = changed ? 'code_changed' : 'no_changes'
       verify_synced_main!
       status = @command_runner.run(
-        RbConfig.ruby, 'toolbox.rb', mode,
+        RbConfig.ruby, 'toolbox.rb', '--production', mode,
         env: toolbox_environment,
         chdir: @repo_dir,
         timeout: TOOLBOX_TIMEOUT,
@@ -82,7 +94,7 @@ module Core
     end
 
     def ensure_clean!
-      status = git!('status', '--porcelain', label: 'Toolbox worktree check')
+      status = git!('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none', label: 'Toolbox worktree check')
       raise 'Toolbox worktree is dirty; refusing automated update' unless status.strip.empty?
     end
 

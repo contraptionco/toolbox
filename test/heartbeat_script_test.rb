@@ -14,11 +14,11 @@ class HeartbeatScriptTest < Minitest::Test
       hold = File.join(repo, 'hold')
       File.write(hold, '')
 
-      first = Open3.popen3(env, 'zsh', SCRIPT)
+      first = Open3.popen3(env, 'zsh', File.join(repo, 'heartbeat.sh'))
       assert wait_until(5) { File.exist?(File.join(repo, 'invocations')) }, 'first heartbeat did not start'
 
       contenders = 3.times.map do
-        stdin, stdout, stderr, wait_thread = Open3.popen3(env, 'zsh', SCRIPT)
+        stdin, stdout, stderr, wait_thread = Open3.popen3(env, 'zsh', File.join(repo, 'heartbeat.sh'))
         stdin.close
         [stdout, stderr, wait_thread]
       end
@@ -50,11 +50,57 @@ class HeartbeatScriptTest < Minitest::Test
       FileUtils.mkdir_p(lock_path)
       File.write(File.join(lock_path, 'pid'), "#{Process.pid} old-token Mon Jan 1 00:00:00 2001\n")
 
-      _stdout, stderr, status = Open3.capture3(heartbeat_env(repo), 'zsh', SCRIPT)
+      _stdout, stderr, status = Open3.capture3(heartbeat_env(repo), 'zsh', File.join(repo, 'heartbeat.sh'))
 
       assert status.success?, stderr
       assert_equal 1, File.readlines(File.join(repo, 'invocations')).length
       refute File.exist?(lock_path)
+    end
+  end
+
+  def test_development_copy_cannot_redirect_to_production
+    Dir.mktmpdir do |home|
+      repo = File.join(home, 'code', 'toolbox')
+      development = File.join(home, 'development')
+      prepare_fixture(repo)
+      prepare_fixture(development)
+      env = heartbeat_env(repo).merge('HOME' => home, 'TOOLBOX_PRODUCTION_REPO_DIR' => nil)
+
+      _stdout, stderr, status = Open3.capture3(env, 'zsh', File.join(development, 'heartbeat.sh'))
+
+      refute status.success?
+      assert_includes stderr, 'outside the intended production checkout'
+      assert_no_heartbeat_effects(repo)
+      assert_no_heartbeat_effects(development)
+    end
+  end
+
+  def test_existing_default_production_location_needs_no_new_environment_variable
+    Dir.mktmpdir do |home|
+      repo = File.join(home, 'code', 'toolbox')
+      prepare_fixture(repo)
+      env = heartbeat_env(repo).merge('HOME' => home, 'TOOLBOX_PRODUCTION_REPO_DIR' => nil)
+
+      _stdout, stderr, status = Open3.capture3(env, 'zsh', File.join(repo, 'heartbeat.sh'))
+
+      assert status.success?, stderr
+      assert_equal 1, File.readlines(File.join(repo, 'invocations')).length
+    end
+  end
+
+  def test_repo_override_cannot_select_a_different_checkout
+    Dir.mktmpdir do |repo|
+      Dir.mktmpdir do |other|
+        prepare_fixture(repo)
+        env = heartbeat_env(repo).merge('TOOLBOX_REPO_DIR' => other)
+
+        _stdout, stderr, status = Open3.capture3(env, 'zsh', File.join(repo, 'heartbeat.sh'))
+
+        refute status.success?
+        assert_includes stderr, 'differs from the production checkout'
+        assert_no_heartbeat_effects(repo)
+        assert_no_heartbeat_effects(other)
+      end
     end
   end
 
@@ -63,6 +109,7 @@ class HeartbeatScriptTest < Minitest::Test
   def prepare_fixture(repo)
     lib = File.join(repo, 'lib')
     FileUtils.mkdir_p(lib)
+    FileUtils.cp(SCRIPT, File.join(repo, 'heartbeat.sh'))
     FileUtils.ln_s(WRITER, File.join(lib, 'bounded_log_writer.rb'))
     File.write(
       File.join(lib, 'heartbeat_update.rb'),
@@ -80,8 +127,15 @@ class HeartbeatScriptTest < Minitest::Test
   def heartbeat_env(repo)
     {
       'TOOLBOX_REPO_DIR' => repo,
+      'TOOLBOX_PRODUCTION_REPO_DIR' => repo,
       'TOOLBOX_HEARTBEAT_LOG' => File.join(repo, 'heartbeat.log')
     }
+  end
+
+  def assert_no_heartbeat_effects(repo)
+    %w[invocations heartbeat.log .heartbeat.lock .heartbeat.lock.reclaim].each do |name|
+      refute File.exist?(File.join(repo, name)), "unexpected heartbeat effect: #{name}"
+    end
   end
 
   def wait_until(timeout)

@@ -2,8 +2,35 @@
 # LaunchAgents do not load an interactive shell environment.
 export PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# Define configurable paths with defaults
-REPO_DIR="${TOOLBOX_REPO_DIR:-$HOME/code/toolbox}"
+# Resolve the script itself before touching locks, logs, Git, or services. A
+# development copy must never fall back to operating on the live checkout.
+SCRIPT_DIR="${0:A:h}"
+if [[ -z "$TOOLBOX_PRODUCTION_REPO_DIR" && -z "$HOME" ]]; then
+  print -u2 -- 'Heartbeat refused: HOME is missing; cannot identify the production checkout.'
+  exit 1
+fi
+PRODUCTION_DIR="${TOOLBOX_PRODUCTION_REPO_DIR:-$HOME/code/toolbox}"
+if [[ "$PRODUCTION_DIR" != /* || ! -d "$PRODUCTION_DIR" ]]; then
+  print -u2 -- 'Heartbeat refused: intended production checkout is unavailable or not absolute.'
+  exit 1
+fi
+PRODUCTION_DIR="$(cd -- "$PRODUCTION_DIR" && pwd -P)" || exit 1
+if [[ "$SCRIPT_DIR" != "$PRODUCTION_DIR" ]]; then
+  print -u2 -- 'Heartbeat refused: script is outside the intended production checkout.'
+  exit 1
+fi
+if [[ -n "$TOOLBOX_REPO_DIR" ]]; then
+  if [[ "$TOOLBOX_REPO_DIR" != /* || ! -d "$TOOLBOX_REPO_DIR" ]]; then
+    print -u2 -- 'Heartbeat refused: TOOLBOX_REPO_DIR must identify the production checkout.'
+    exit 1
+  fi
+  CONFIGURED_REPO="$(cd -- "$TOOLBOX_REPO_DIR" && pwd -P)" || exit 1
+  if [[ "$CONFIGURED_REPO" != "$PRODUCTION_DIR" ]]; then
+    print -u2 -- 'Heartbeat refused: TOOLBOX_REPO_DIR differs from the production checkout.'
+    exit 1
+  fi
+fi
+REPO_DIR="$PRODUCTION_DIR"
 LOCK_PATH="${REPO_DIR}/.heartbeat.lock"
 LOG_FILE="${TOOLBOX_HEARTBEAT_LOG:-${REPO_DIR}/heartbeat.log}"
 MAX_LOG_BYTES=$((10 * 1024 * 1024))

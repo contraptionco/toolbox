@@ -4,6 +4,7 @@ require 'net/http'
 require 'uri'
 require 'json'
 require 'yaml'
+require 'tmpdir'
 require_relative '../config'
 require_relative 'command_runner'
 require_relative 'docker_service'
@@ -39,70 +40,125 @@ module Core
       puts "Repository cloned successfully."
     end
 
-    def self.pull_latest(local_path, branch = nil)
-      Dir.chdir(local_path) do
-        puts "Fetching latest changes..."
-        fetch_command = ['git', 'fetch', 'origin']
-        fetch_command << branch if branch
-        _stdout, stderr, status = run_command(
-          *fetch_command,
-          timeout: GIT_TIMEOUT,
-          label: 'Git fetch'
-        )
-        raise "Error fetching updates: #{stderr}" unless status.success?
+    # Resolve only an explicit origin branch or tag. An omitted ref always means
+    # main; the developer's current branch/upstream never selects production.
+    def self.resolve_remote_release(local_path, requested_ref)
+      ref = requested_ref.to_s
+      raise 'A release ref is required' if ref.empty? || ref.start_with?('-')
 
-        if branch
-          puts "Checking out branch: #{branch}..."
-          _stdout, stderr, status = run_command(
-            'git', 'checkout', branch,
-            timeout: GIT_TIMEOUT,
-            label: 'Git checkout'
-          )
-          raise "Error checking out branch #{branch}: #{stderr}" unless status.success?
-        end
+      candidates = if ref.start_with?('refs/heads/', 'refs/tags/')
+                     [ref]
+                   else
+                     ["refs/heads/#{ref}", "refs/tags/#{ref}"]
+                   end
+      candidates.each do |candidate|
+        git_output!(local_path, 'check-ref-format', candidate)
+      end
+      listing = git_output!(local_path, 'ls-remote', '--refs', 'origin', *candidates)
+      matches = listing.lines.filter_map do |line|
+        _sha, remote_ref = line.split
+        remote_ref if candidates.include?(remote_ref)
+      end.uniq
+      raise "Release ref #{ref} is missing or ambiguous on origin" unless matches.length == 1
 
-        puts "Pulling latest changes..."
-        pull_command = ['git', 'pull', '--ff-only']
-        pull_command.concat(['origin', branch]) if branch
-        _stdout, stderr, status = run_command(
-          *pull_command,
-          timeout: GIT_TIMEOUT,
-          label: 'Git pull'
-        )
-        raise "Error pulling updates: #{stderr}" unless status.success?
-
-        puts "Repository updated successfully."
+      remote_ref = matches.first
+      temporary_ref = "refs/toolbox/release-#{Process.pid}-#{rand(1_000_000_000)}"
+      begin
+        git_output!(local_path, 'fetch', '--no-tags', 'origin', "#{remote_ref}:#{temporary_ref}")
+        head = git_output!(local_path, 'rev-parse', '--verify', "#{temporary_ref}^{commit}").strip
+        { head: head, name: remote_ref.sub(%r{\Arefs/(heads|tags)/}, ''), tag: remote_ref.start_with?('refs/tags/') }
+      ensure
+        git_output!(local_path, 'update-ref', '-d', temporary_ref)
       end
     end
 
-    def self.has_changes?(local_path, branch = 'main')
-      return true unless Dir.exist?(local_path)
+    def self.ensure_clean_source!(local_path, generated_paths: [])
+      status = git_output!(local_path, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none')
+      status.split("\0").each do |entry|
+        # Only explicitly configured, untracked generated files are exempt.
+        # Tracked modifications to those same names are always rejected.
+        next if entry.start_with?('?? ') && generated_paths.include?(entry[3..])
 
-      Dir.chdir(local_path) do
+        raise "Application checkout #{local_path} is dirty; refusing deployment"
+      end
+    end
+
+    def self.prepare_release(service_config)
+      local_path = service_config.fetch(:local_path)
+      requested_ref = service_config[:branch] || 'main'
+      cloned = !Dir.exist?(local_path)
+      clone_repo(service_config.fetch(:repo_url), local_path, requested_ref.sub(%r{\Arefs/(heads|tags)/}, '')) if cloned
+      generated_paths = []
+      generated_paths << '.env' if service_config[:env_config]
+      generated_paths << 'compose.override.yml' if service_config[:compose_override]
+      ensure_clean_source!(local_path, generated_paths: generated_paths)
+      ensure_generated_paths_untracked!(local_path, generated_paths)
+
+      release = resolve_remote_release(local_path, requested_ref)
+      branch = git_output!(local_path, 'branch', '--show-current').strip
+      head = current_head(local_path)
+      if release[:tag]
+        unless (branch.empty? || branch == release[:name]) && head == release[:head]
+          raise "Application checkout does not match pinned origin tag #{requested_ref}; refusing deployment"
+        end
+      else
+        unless branch == release[:name]
+          raise "Application checkout is on #{branch.empty? ? 'a detached HEAD' : branch}, expected #{release[:name]}; refusing deployment"
+        end
+        # A local commit must already be reachable from the approved remote ref.
+        # This rejects both unpushed commits and divergent histories.
+        git_output!(local_path, 'merge-base', '--is-ancestor', head, release[:head])
+        if service_config[:auto_update] && head != release[:head]
+          git_output!(local_path, 'merge', '--ff-only', release[:head])
+          head = release[:head]
+        end
+      end
+      ensure_clean_source!(local_path, generated_paths: generated_paths)
+      ensure_generated_paths_untracked!(local_path, generated_paths)
+      raise 'Application HEAD changed during validation; refusing deployment' unless current_head(local_path) == head
+
+      { head: head, cloned: cloned }
+    end
+
+    def self.ensure_generated_paths_untracked!(local_path, generated_paths)
+      generated_paths.each do |path|
+        tracked = git_output!(local_path, 'ls-files', '--', path)
+        raise "Configured generated file #{path} is tracked; refusing deployment" unless tracked.empty?
+      end
+    end
+
+    def self.git_output!(local_path, *arguments)
+      stdout, stderr, status = run_command(
+        'git', '-C', local_path, *arguments,
+        timeout: GIT_TIMEOUT,
+        label: 'Application source validation'
+      )
+      raise "Application source validation failed (#{arguments.first}): #{stderr.strip}" unless status.success?
+
+      stdout
+    end
+
+    # Archive the verified commit instead of copying a mutable working tree.
+    # Ignored files, untracked files, and edits made after validation cannot enter
+    # the build context. Temp directories are private and removed on failure.
+    def self.with_release_snapshot(local_path, head)
+      tree = git_output!(local_path, 'ls-tree', '-r', '-z', head)
+      if tree.split("\0").any? { |entry| entry.start_with?('160000 ') }
+        raise 'Immutable release snapshots do not support Git submodules'
+      end
+      Dir.mktmpdir('toolbox-release-') do |directory|
+        archive = File.join(directory, 'source.tar')
+        source = File.join(directory, 'source')
+        FileUtils.mkdir_p(source)
+        git_output!(local_path, 'archive', '--format=tar', "--output=#{archive}", head)
         _stdout, stderr, status = run_command(
-          'git', 'fetch', 'origin', branch,
+          'tar', '-xf', archive, '-C', source,
           timeout: GIT_TIMEOUT,
-          label: 'Git fetch'
+          label: 'Application release extraction'
         )
-        raise "Error fetching updates: #{stderr}" unless status.success?
+        raise "Could not extract application release: #{stderr}" unless status.success?
 
-        stdout, stderr, status = run_command(
-          'git', 'branch', '--show-current',
-          timeout: GIT_TIMEOUT,
-          label: 'Git branch lookup'
-        )
-        raise "Error checking current branch: #{stderr}" unless status.success?
-        return true unless stdout.strip == branch
-
-        # Compare local and remote branches
-        stdout, stderr, status = run_command(
-          'git', 'rev-list', "HEAD..origin/#{branch}", '--count',
-          timeout: GIT_TIMEOUT,
-          label: 'Git update check'
-        )
-        raise "Error checking for updates: #{stderr}" unless status.success?
-
-        stdout.strip.to_i > 0
+        yield source
       end
     end
 
@@ -232,16 +288,23 @@ module Core
     def self.build_docker_image(local_path, image_name)
       puts "Building Docker image #{image_name} in #{local_path}..."
 
-      Dir.chdir(local_path) do
-        _stdout, stderr, status = run_command(
-          'docker', 'build', '-t', image_name, '.',
-          timeout: DOCKER_BUILD_TIMEOUT,
-          label: 'Docker image build'
-        )
+      Dir.mktmpdir('toolbox-image-') do |directory|
+        image_id_path = File.join(directory, 'image.id')
+        _stdout, stderr, status = Dir.chdir(local_path) do
+          run_command(
+            'docker', 'build', '--iidfile', image_id_path, '-t', image_name, '.',
+            timeout: DOCKER_BUILD_TIMEOUT,
+            label: 'Docker image build'
+          )
+        end
         raise "Error building Docker image: #{stderr}" unless status.success?
-      end
 
-      puts "Docker image built successfully."
+        image_id = File.read(image_id_path).strip
+        raise 'Docker build did not produce an immutable image ID' unless image_id.match?(/\Asha256:[0-9a-f]{64}\z/)
+
+        puts 'Docker image built successfully.'
+        image_id
+      end
     end
 
     def self.compose_file_path(local_path)
@@ -400,45 +463,12 @@ module Core
     def self.update_git_service(service_config)
       name = service_config[:name]
       local_path = service_config[:local_path]
-      repo_url = service_config[:repo_url]
-      branch = service_config[:branch]
       install_cmd = service_config[:install_cmd]
       use_compose = service_config[:use_compose]
 
       puts "Processing Git service: #{name}..."
-
-      repo_exists = Dir.exist?(local_path)
-      repo_updated_or_cloned = false
-
-      if repo_exists
-        if service_config[:auto_update]
-          changes = has_changes?(local_path, branch || 'main')
-          if changes || service_config[:force_update]
-            puts "Changes detected in repository, updating..."
-            pull_latest(local_path, branch)
-            repo_updated_or_cloned = true
-          else
-            puts "No changes detected in repository."
-          end
-        else
-          puts "Auto-update disabled for #{name}. Checking repository status."
-          unless Dir.exist?(File.join(local_path, '.git'))
-            raise "#{local_path} exists but is not a valid Git repository"
-          end
-        end
-      else
-        puts "Repository not found locally, cloning..."
-        clone_repo(repo_url, local_path, branch)
-        repo_exists = true
-        repo_updated_or_cloned = true
-      end
-
-      if branch
-        puts "Using specified branch: #{branch}"
-      else
-        latest_tag = get_latest_release_tag(repo_url)
-        checkout_tag(local_path, latest_tag)
-      end
+      release = prepare_release(service_config)
+      head = release.fetch(:head)
 
       env_path = nil
       env_changed = false
@@ -472,26 +502,23 @@ module Core
         compose_override_changed = apply_compose_override(local_path, service_config[:compose_override])
       end
 
-      head = current_head(local_path)
       desired_state = deployment_state(
         service_config,
         head,
         env_path: env_path,
         compose_override_path: compose_override_path
       )
-      deployment_needed = repo_updated_or_cloned || service_config[:force_update] ||
+      deployment_needed = release[:cloned] || service_config[:force_update] ||
                           deployment_required?(service_config, desired_state)
 
-      if deployment_needed
-        if name == 'ghost_theme' && service_config[:deploy_path] && service_config[:build_cmd]
-          deploy_with_temp_folder(local_path, service_config[:deploy_path], service_config[:build_cmd])
-        else
-          run_build_command(local_path, service_config[:build_cmd]) if service_config[:build_cmd]
-          deploy_files(local_path, service_config[:deploy_path]) if service_config[:deploy_path]
-        end
-
-        if service_config[:container_config]&.dig(:image_name)
-          build_docker_image(local_path, service_config[:container_config][:image_name])
+      built_image_id = nil
+      if deployment_needed && (service_config[:build_cmd] || service_config[:deploy_path] || service_config[:container_config])
+        with_release_snapshot(local_path, head) do |source|
+          run_build_command(source, service_config[:build_cmd]) if service_config[:build_cmd]
+          deploy_files(source, service_config[:deploy_path]) if service_config[:deploy_path]
+          if service_config[:container_config]&.dig(:image_name)
+            built_image_id = build_docker_image(source, service_config[:container_config][:image_name])
+          end
         end
       end
 
@@ -512,8 +539,6 @@ module Core
           log_options: container_config.fetch(:log_options, { 'max-size' => '10m', 'max-file' => '3' })
         }
 
-        build_docker_image(local_path, image_name) if image_name && !image_exists?(image_name)
-
         container_running = Core::DockerService.container_running?(container_name)
         health_status = if container_running && docker_config[:healthcheck]
                           Core::DockerService.container_health_status(container_name)
@@ -524,6 +549,9 @@ module Core
                                !Core::DockerService.container_logging_compliant?(container_name, docker_config)
         image_mismatch = container_running && image_name &&
                          !Core::DockerService.container_uses_image?(container_name, image_name)
+        if image_mismatch && !deployment_needed
+          raise "Local image tag #{image_name} differs from running #{container_name}; refusing unapproved image replacement"
+        end
         recreate = deployment_needed || env_changed || !container_running || healthcheck_missing ||
                    healthcheck_unhealthy || logging_noncompliant || image_mismatch
 
@@ -532,6 +560,13 @@ module Core
           puts "Recreating unhealthy container #{container_name}." if healthcheck_unhealthy
           puts "Recreating #{container_name} to apply bounded logging." if logging_noncompliant
           puts "Recreating #{container_name} to use the successfully built image." if image_mismatch
+          # Every replacement uses a build from the verified commit. Never adopt
+          # an existing mutable tag, including after a development build changed it.
+          built_image_id ||= with_release_snapshot(local_path, head) do |source|
+            run_build_command(source, service_config[:build_cmd]) if service_config[:build_cmd]
+            build_docker_image(source, image_name)
+          end
+          docker_config[:image] = built_image_id
           Core::DockerService.stop_container(container_name)
           Core::DockerService.start_container(docker_config)
         else

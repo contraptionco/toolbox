@@ -63,7 +63,7 @@ Before you start, ensure you have:
 3. Configure your Cloudflare tunnel in `config.yml`
 4. Edit `config.rb` to match your services and domains
 5. Install Ruby: `asdf install`
-6. Run: `ruby toolbox.rb`
+6. Commit and push your configuration to your fork's `main`, then update the production checkout and run: `ruby toolbox.rb --production`
 7. Set up the heartbeat script for auto-updates
 
 ## Setting up 1Password CLI
@@ -165,7 +165,7 @@ GIT_SERVICES = [
 
 To keep your server updated automatically:
 
-1. Run the installation script: `ruby install_launch_agent.rb`
+1. From the production checkout, run: `ruby install_launch_agent.rb --production`
 2. Edit the generated plist file:
    ```
    vi ~/Library/LaunchAgents/co.contraption.toolbox.heartbeat.plist
@@ -176,7 +176,67 @@ To keep your server updated automatically:
    - Update other paths if necessary
 4. Load the LaunchAgent: `launchctl load ~/Library/LaunchAgents/co.contraption.toolbox.heartbeat.plist`
 
-The script will check for updates every minute and apply them if found.
+The script will check for updates every minute and apply them if found. This is
+a production deployment mechanism: merging into `main` can update the live
+server on the next successful heartbeat.
+
+## Developing Toolbox on the production Mac
+
+Use a separate clone for development. Leave the production checkout at
+`~/code/toolbox` and the application checkouts named in `config.rb` untouched:
+
+```sh
+mkdir -p ~/development
+git clone git@github.com:contraptionco/toolbox.git ~/development/toolbox
+cd ~/development/toolbox
+git pull --ff-only origin main
+git switch -c my-change
+```
+
+Use your fork's remote URL if appropriate. A separate development environment is
+not necessary for editing Toolbox and running its unit tests. See
+[AGENTS.md](AGENTS.md) for the production boundaries, test commands, and PR workflow.
+
+Do not start Toolbox from the development clone. Its configuration still names
+the production Docker containers, data, ports, and application repositories.
+The entrypoints refuse an unintended checkout before running services or writing
+heartbeat state. Manual orchestration and LaunchAgent installation additionally
+require `--production`. The default production location is `~/code/toolbox`;
+`TOOLBOX_PRODUCTION_REPO_DIR` explicitly selects a different production location.
+Changing this variable does not move application data or isolate Docker.
+
+For an intentional production run, prefer `./heartbeat.sh` from the production
+checkout so the heartbeat lock serializes scheduled and manual runs. Toolbox
+requires a clean `main` matching `origin/main` and refuses unexpected branches
+instead of switching them. Development edits to the production checkout are
+unsafe even with these checks: the scheduler loads its own code from that path.
+
+Git application services default to the remote `main` branch when `branch` is
+omitted. Set `branch` explicitly to pin another branch or release tag. Application
+source validation rejects unexpected branches, local commits ahead of or diverged
+from the remote, tracked modifications, and untracked source files. A pinned tag
+must match the remote tag's commit. Toolbox does not discard local changes to
+make a deployment pass.
+
+Docker and static-file builds use a temporary snapshot of the verified commit,
+so ignored files and edits made during a build cannot enter that build context.
+Snapshots omit `.git` and reject submodules rather than silently building without
+their contents; applications requiring either need a supported build path first.
+Replacement app containers use the immutable ID of the newly built image. An
+unexplained change to a production image tag is refused while the existing
+container is retained. Do not use production image tags for development builds.
+Compose services retain their existing project directories and generated runtime
+files; their bind mounts and install commands still need production-only paths.
+
+These checks reduce accidental deployment risk; they do not provide automatic
+rollback or zero-downtime replacement. Before rolling out this change, review
+existing application checkouts for local modifications and branch drift. A
+source-validation rejection leaves its existing container running and reports a failure.
+Do not remove local files or relax the checks just to silence that failure.
+
+Disk usage at or above 90% blocks the heartbeat before service reconciliation and
+scheduled backups. Diagnose disk pressure separately; do not lower this guard or
+prune production volumes as part of development.
 
 ## Security: Automatic screen locking
 
