@@ -10,7 +10,7 @@ ingress:
   - hostname: telegraph.contraption.co
     service: http://localhost:8000
   - hostname: write.contraption.co
-    service: http://localhost:2368
+    service: http_status:410
   - hostname: postcard.contraption.co
     service: http://localhost:3000
   - hostname: "*.postcard.page"

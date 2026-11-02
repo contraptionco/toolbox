@@ -19,8 +19,6 @@ module Core
         Config::DATA_DIR,
         Config::CODE_DIR,
         "#{Config::DATA_DIR}/postgres",
-        "#{Config::DATA_DIR}/mysql",
-        "#{Config::DATA_DIR}/ghost",
         "#{Config::DATA_DIR}/plausible",
         File.dirname(Config::TUNNEL_CONFIG[:log_file])
       ].each do |dir|

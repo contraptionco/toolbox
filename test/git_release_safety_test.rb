@@ -2,6 +2,7 @@ require 'tmpdir'
 require 'open3'
 require_relative 'test_helper'
 require_relative '../lib/git_service'
+require_relative '../scripts/ghost_backup'
 
 class GitReleaseSafetyTest < Minitest::Test
   IMAGE_ID = "sha256:#{'a' * 64}"
@@ -51,6 +52,116 @@ class GitReleaseSafetyTest < Minitest::Test
     git(directory, 'add', '--all')
     git(directory, 'commit', '-m', message)
     git(directory, 'rev-parse', 'HEAD')
+  end
+
+  def with_backup_repository(service)
+    original_path = Scripts::GhostBackup::REPO_PATH
+    original_url = Scripts::GhostBackup::REPO_URL
+    Scripts::GhostBackup.send(:remove_const, :REPO_PATH)
+    Scripts::GhostBackup.const_set(:REPO_PATH, service[:local_path])
+    Scripts::GhostBackup.send(:remove_const, :REPO_URL)
+    Scripts::GhostBackup.const_set(:REPO_URL, service[:repo_url])
+    yield Scripts::GhostBackup.new
+  ensure
+    Scripts::GhostBackup.send(:remove_const, :REPO_PATH)
+    Scripts::GhostBackup.const_set(:REPO_PATH, original_path)
+    Scripts::GhostBackup.send(:remove_const, :REPO_URL)
+    Scripts::GhostBackup.const_set(:REPO_URL, original_url)
+  end
+
+  def test_ghost_backup_updates_existing_repository_through_compatibility_helper
+    with_repository do |service, upstream|
+      File.write(File.join(upstream, 'remote.txt'), 'published backup')
+      remote_head = commit(upstream, 'published')
+      with_backup_repository(service) do |backup|
+        assert backup.send(:ensure_backup_repo)
+      end
+      assert_equal remote_head, git(service[:local_path], 'rev-parse', 'HEAD')
+    end
+  end
+
+  def test_ghost_backup_clones_missing_repository_before_updating
+    with_repository do |service, upstream|
+      FileUtils.rm_rf(service[:local_path])
+      with_backup_repository(service) do |backup|
+        assert backup.send(:ensure_backup_repo)
+      end
+      assert_equal git(upstream, 'rev-parse', 'HEAD'), git(service[:local_path], 'rev-parse', 'HEAD')
+      assert_equal 'main', git(service[:local_path], 'branch', '--show-current')
+    end
+  end
+
+  def test_backup_pull_preserves_pending_exports_while_fast_forwarding
+    with_repository do |service, upstream|
+      File.write(File.join(service[:local_path], 'app.txt'), 'pending export')
+      File.write(File.join(service[:local_path], 'pending.csv'), 'pending members')
+      File.write(File.join(upstream, 'remote.txt'), 'published backup')
+      remote_head = commit(upstream, 'published')
+      assert Core::GitService.pull_latest(service[:local_path])
+      assert_equal remote_head, git(service[:local_path], 'rev-parse', 'HEAD')
+      assert_equal 'pending export', File.read(File.join(service[:local_path], 'app.txt'))
+      assert_equal 'pending members', File.read(File.join(service[:local_path], 'pending.csv'))
+      # Application deployments must still reject the same dirty checkout.
+      assert_raises(RuntimeError) { Core::GitService.prepare_release(service) }
+    end
+  end
+
+  def test_backup_pull_preserves_unpushed_commit_without_weakening_deployment_guard
+    with_repository do |service, _upstream|
+      File.write(File.join(service[:local_path], 'app.txt'), 'unpushed backup')
+      local_head = commit(service[:local_path], 'backup awaiting retry')
+      assert Core::GitService.pull_latest(service[:local_path], nil)
+      assert_equal local_head, git(service[:local_path], 'rev-parse', 'HEAD')
+      assert_raises(RuntimeError) { Core::GitService.prepare_release(service) }
+    end
+  end
+
+  def test_backup_pull_rejects_divergence_without_losing_local_commit
+    with_repository do |service, upstream|
+      File.write(File.join(service[:local_path], 'local.txt'), 'unpushed backup')
+      local_head = commit(service[:local_path], 'local backup')
+      File.write(File.join(upstream, 'remote.txt'), 'remote backup')
+      commit(upstream, 'remote backup')
+      assert_raises(RuntimeError) { Core::GitService.pull_latest(service[:local_path], 'main') }
+      assert_equal local_head, git(service[:local_path], 'rev-parse', 'HEAD')
+      assert_equal 'unpushed backup', File.read(File.join(service[:local_path], 'local.txt'))
+      refute File.exist?(File.join(service[:local_path], '.git', 'MERGE_HEAD'))
+    end
+  end
+
+  def test_backup_pull_rejects_conflicting_remote_change_without_discarding_export
+    with_repository do |service, upstream|
+      File.write(File.join(service[:local_path], 'app.txt'), 'pending local export')
+      old_head = git(service[:local_path], 'rev-parse', 'HEAD')
+      File.write(File.join(upstream, 'app.txt'), 'conflicting remote export')
+      commit(upstream, 'remote backup')
+      assert_raises(RuntimeError) { Core::GitService.pull_latest(service[:local_path], 'main') }
+      assert_equal old_head, git(service[:local_path], 'rev-parse', 'HEAD')
+      assert_equal 'pending local export', File.read(File.join(service[:local_path], 'app.txt'))
+    end
+  end
+
+  def test_backup_pull_never_switches_an_unexpected_branch
+    with_repository do |service, _upstream|
+      git(service[:local_path], 'switch', '-c', 'development')
+      error = assert_raises(RuntimeError) { Core::GitService.pull_latest(service[:local_path], 'main') }
+      assert_includes error.message, 'refusing to switch'
+      assert_equal 'development', git(service[:local_path], 'branch', '--show-current')
+      git(service[:local_path], 'switch', '--detach')
+      assert_raises(RuntimeError) { Core::GitService.pull_latest(service[:local_path], 'main') }
+      assert_equal '', git(service[:local_path], 'branch', '--show-current')
+    end
+  end
+
+  def test_backup_pull_propagates_fetch_failure_and_preserves_pending_export
+    with_repository do |service, _upstream, directory|
+      File.write(File.join(service[:local_path], 'app.txt'), 'pending export')
+      old_head = git(service[:local_path], 'rev-parse', 'HEAD')
+      git(service[:local_path], 'remote', 'set-url', 'origin', File.join(directory, 'missing-origin'))
+      assert_raises(RuntimeError) { Core::GitService.pull_latest(service[:local_path], 'main') }
+      assert_equal old_head, git(service[:local_path], 'rev-parse', 'HEAD')
+      assert_equal 'pending export', File.read(File.join(service[:local_path], 'app.txt'))
+    end
   end
 
   def test_missing_checkout_clones_the_explicit_default_main

@@ -70,54 +70,7 @@ module Config
         POSTGRES_MAX_CONNECTIONS: '1000'
       },
       auto_update: true                                      # Whether to auto-update when image tag changes
-    },
-    {
-      name: 'mysql',                                         # Container name
-      image: 'mysql:8.0',                                    # Docker image to use (specific version recommended)
-      ports: ['3306:3306'],                                  # Port mapping (host:container)
-      volumes: ["#{DATA_DIR}/mysql:/var/lib/mysql"],         # Data persistence
-      environment: {                                         # Environment variables
-        # Credentials retrieved from 1Password (CHANGE THESE to your 1Password items)
-        MYSQL_ROOT_PASSWORD: { type: '1password', item: 'MySQL Docker', field: 'password' },
-        MYSQL_USER: { type: '1password', item: 'MySQL Docker', field: 'username' },
-        MYSQL_PASSWORD: { type: '1password', item: 'MySQL Docker', field: 'password' },
-        MYSQL_DATABASE: 'ghost'                              # Default database name
-      },
-      auto_update: true                                      # Whether to auto-update when image tag changes
-    },
-
-    {
-      name: 'ghost',                                         # Container name
-      image: 'ghost:6.19.1',                                  # Docker image to use (specific version recommended)
-      ports: ['2368:2368'],                                  # Port mapping (host:container)
-      volumes: ["#{DATA_DIR}/ghost:/var/lib/ghost/content"], # Data persistence
-      environment: {                                         # Environment variables
-        # CHANGE THESE URLs to your domain
-        url: 'https://www.contraption.co',                   # Public URL for your Ghost site
-        admin__url: 'https://write.contraption.co',          # Admin URL for your Ghost site
-
-        # Database configuration (linked to MySQL container)
-        database__client: 'mysql',
-        database__connection__host: 'mysql',
-        database__connection__user: { type: '1password', item: 'MySQL Docker', field: 'username' },
-        database__connection__password: { type: '1password', item: 'MySQL Docker', field: 'password' },
-        database__connection__database: 'ghost',
-
-        # Mail configuration (CHANGE THESE to your mail provider)
-        mail__transport: 'SMTP',
-        mail__options__service: 'Mailgun',
-        mail__options__host: 'smtp.mailgun.org',
-        mail__options__port: '465',
-        mail__options__secure: 'true',
-        # Mail credentials from 1Password (CHANGE THESE to your 1Password items)
-        mail__options__auth__user: { type: '1password', item: 'Mailgun', field: 'username' },
-        mail__options__auth__pass: { type: '1password', item: 'Mailgun', field: 'password' },
-        # CHANGE THIS to your email address
-        mail__from: "'Philip I. Thomas' <philip@contraption.co>"
-      },
-      auto_update: true,                                     # Whether to auto-update when image tag changes
-      depends_on: ['mysql']                                  # This container depends on MySQL
-    },
+    }
   ]
 
   #-----------------------------------------------------------------------------------
@@ -127,15 +80,6 @@ module Config
   # Services that are based on Git repositories
   # These can be code that gets built and deployed, or code that runs in containers
   GIT_SERVICES = [
-    {
-      name: 'ghost_theme',                                   # Service name
-      repo_url: 'git@github.com:contraptionco/contraption-ghost-theme.git', # Git repo
-      local_path: "#{CODE_DIR}/contraption-ghost-theme",     # Where to clone the repo
-      deploy_path: "#{DATA_DIR}/ghost/themes/contraption-ghost-theme", # Where to deploy the built theme (optional)
-      build_cmd: 'asdf install && /Users/philip/.asdf/shims/npm install && /Users/philip/.asdf/shims/npm run build', # Build command
-      auto_update: true, # Whether to auto-update when repo changes
-      after_deploy: { type: 'restart_service', service: 'ghost' } # Action after deployment
-    },
     {
       name: 'postcard',                                          # Service name
       repo_url: 'git@github.com:contraptionco/postcard.git',     # CHANGE THIS to your repository
@@ -319,15 +263,6 @@ module Config
       class_name: 'Scripts::PostgresBackup',
       method: :run,
       enabled: true
-    },
-    {
-      name: 'ghost_backup',                                  # Script name
-      type: 'ruby',                                          # Script type (:ruby or :shell)
-      description: 'Back up Ghost data and metadata to ghost-backup repository',
-      require: 'scripts/ghost_backup',                       # Relative path to the script file
-      class_name: 'Scripts::GhostBackup',                    # Runner class
-      method: :run,                                          # Method to execute
-      enabled: true                                          # Toggle script without removing config
     }
   ]
 

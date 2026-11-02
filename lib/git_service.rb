@@ -40,6 +40,27 @@ module Core
       puts "Repository cloned successfully."
     end
 
+    # Backup writers still use this helper. Unlike application deployment,
+    # they can legitimately have pending exports or an unpushed backup commit.
+    # Git's fast-forward-only merge preserves that work and rejects conflicts;
+    # never switch branches, reset, or reuse this path for deploying applications.
+    def self.pull_latest(local_path, branch = 'main')
+      branch = branch || 'main'
+      git_output!(local_path, 'check-ref-format', "refs/heads/#{branch}")
+      expected_branch = -> do
+        current = git_output!(local_path, 'branch', '--show-current').strip
+        unless current == branch
+          raise "Backup checkout is not on #{branch}; refusing to switch or update it"
+        end
+      end
+      expected_branch.call
+      remote_ref = "refs/remotes/origin/#{branch}"
+      git_output!(local_path, 'fetch', '--no-tags', 'origin', "refs/heads/#{branch}:#{remote_ref}")
+      expected_branch.call
+      git_output!(local_path, 'merge', '--ff-only', remote_ref)
+      true
+    end
+
     # Resolve only an explicit origin branch or tag. An omitted ref always means
     # main; the developer's current branch/upstream never selects production.
     def self.resolve_remote_release(local_path, requested_ref)

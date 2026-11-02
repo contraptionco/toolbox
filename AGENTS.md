@@ -4,6 +4,13 @@ This Mac mini is the production server. Toolbox runs the applications, databases
 Cloudflare Tunnel, backups, and other host services. A scheduled macOS LaunchAgent
 invokes the heartbeat from `/Users/philip/code/toolbox` every minute.
 
+Postcard and its PostgreSQL database are the critical application services on this
+Mac. Bully Pulpit is also critical, but runs on Vercel; preserve its local
+checkouts and development work without treating them as Mac-hosted production.
+Ghost and Booklet are retired. Do not recreate their services, data, or Ghost
+backup automation during maintenance. Existing domain redirects remain
+intentional. Preserve remote backup history unless the user authorizes removal.
+
 ## Use a separate checkout
 
 - Treat `/Users/philip/code/toolbox` and application repositories referenced by
