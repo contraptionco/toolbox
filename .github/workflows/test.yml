@@ -13,7 +13,8 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4.1'
+          bundler-cache: true
       - name: Run unit tests
-        run: ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
+        run: bundle exec ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
       - name: Check heartbeat syntax
         run: zsh -n heartbeat.sh

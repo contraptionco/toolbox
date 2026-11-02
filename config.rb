@@ -22,6 +22,17 @@ module Config
   # Ignored local state for deployment markers and runtime environment files.
   RUNTIME_DIR = File.expand_path('.runtime', __dir__)
 
+  # Native, read-only dashboard: macOS metrics must come from the host, not the
+  # Docker VM. Access is enforced at Cloudflare and again by JWT at the origin.
+  # These are public Access application identifiers, not credentials.
+  DASHBOARD = {
+    enabled: true,
+    hostname: 'toolbox.contraption.co',
+    port: 4178,
+    issuer: 'https://contraptionco.cloudflareaccess.com',
+    audience: '1f75d7dd8a314566d75b772f650152a05639eb9c3fb187166f653526c0d14753'
+  }.freeze
+
   #-----------------------------------------------------------------------------------
   # NETWORK CONFIGURATION
   #-----------------------------------------------------------------------------------
@@ -219,19 +230,9 @@ module Config
   # SYSTEM SERVICES - CUSTOMIZE THESE BASED ON YOUR NEEDS
   #-----------------------------------------------------------------------------------
 
-  # System-level services to manage (not in Docker)
-  SYSTEM_SERVICES = [
-    # Netdata monitoring (MODIFY OR REMOVE if not needed)
-    {
-      name: 'netdata',                                       # Service name
-      type: 'system',                                        # Service type
-      cmd: '/opt/homebrew/opt/netdata/sbin/netdata',         # Command path (CHANGE if path differs)
-      detection: 'pgrep -f "/opt/homebrew/opt/netdata/sbin/netdata"', # How to detect if running
-      start_cmd: '/opt/homebrew/opt/netdata/sbin/netdata -D' # Command to start the service
-      # Cloudflare connects to port 19999 to serve:
-      # toolbox.contraption.co
-    }
-  ]
+  # Additional native services. Netdata is retired; host metrics come directly
+  # from the Toolbox dashboard, which has its own LaunchAgent lifecycle.
+  SYSTEM_SERVICES = []
 
   #-----------------------------------------------------------------------------------
   # CLOUDFLARE TUNNEL CONFIGURATION - REQUIRED

@@ -2,6 +2,16 @@ require_relative 'test_helper'
 require_relative '../lib/service_manager'
 
 class ServiceManagerTest < Minitest::Test
+  def test_dashboard_failure_is_reported_without_raising_before_other_services
+    failures = nil
+    capture_output do
+      Core::DashboardService.stub(:ensure_running, -> { raise 'dashboard unavailable' }) do
+        failures = Core::ServiceManager.start_dashboard
+      end
+    end
+    assert_equal ['dashboard'], failures.map { |failure| failure[:component] }
+  end
+
   def test_git_service_failures_do_not_block_later_services
     original = Config::GIT_SERVICES.dup
     Config::GIT_SERVICES.replace([{ name: 'first' }, { name: 'second' }])
@@ -31,6 +41,7 @@ class ServiceManagerTest < Minitest::Test
     disk_status = Core::DiskMonitor::Status.new(percent_used: 50, level: :ok)
 
     error = capture_output do
+      Core::ServiceManager.stub(:start_dashboard, []) do
       Core::ServiceManager.stub(:ensure_prerequisites, -> { events << :prerequisites }) do
         Core::ServiceManager.stub(:handle_tunnel, ->(_changed) { events << :tunnel }) do
           Core::ServiceManager.stub(:start_system_services, -> { events << :system }) do
@@ -53,6 +64,7 @@ class ServiceManagerTest < Minitest::Test
             end
           end
         end
+      end
       end
     end
 

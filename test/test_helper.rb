@@ -1,4 +1,6 @@
+require 'bundler/setup'
 require 'minitest/autorun'
+require 'minitest/mock'
 require 'stringio'
 
 module OutputHelpers

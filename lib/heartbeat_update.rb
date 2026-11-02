@@ -158,10 +158,20 @@ module Core
 end
 
 if $PROGRAM_NAME == __FILE__
+  require_relative 'heartbeat_status'
+  status_record = nil
   begin
     repo_dir = ARGV.fetch(0)
+    status_record = Core::HeartbeatStatus.new(repo_dir)
+    status_record.start
     Core::HeartbeatUpdate.new(repo_dir).update_and_run
+    status_record.finish(success: true, exit_code: 0)
   rescue StandardError => e
+    begin
+      status_record&.finish(success: false, exit_code: 1)
+    rescue StandardError
+      warn 'Could not write heartbeat status.'
+    end
     warn "Heartbeat update failed: #{e.message}"
     exit 1
   end

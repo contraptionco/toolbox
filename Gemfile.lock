@@ -1,0 +1,20 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    base64 (0.3.0)
+    jwt (3.3.0)
+      base64
+    minitest (5.27.0)
+    webrick (1.9.2)
+
+PLATFORMS
+  arm64-darwin-24
+  ruby
+
+DEPENDENCIES
+  jwt (~> 3.3.0)
+  minitest (~> 5.25)
+  webrick (~> 1.9.2)
+
+BUNDLED WITH
+   2.6.2
