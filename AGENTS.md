@@ -7,6 +7,20 @@ invokes the heartbeat from `/Users/philip/code/toolbox` every minute.
 Postcard and its PostgreSQL database are the critical application services on this
 Mac. Bully Pulpit is also critical, but runs on Vercel; preserve its local
 checkouts and development work without treating them as Mac-hosted production.
+The parallel Bully Pulpit deployment at `bully-pulpit.contraption.co` uses the
+Compose project in `deployments/bully-pulpit/`, separate containers and PostgreSQL
+data under `/Users/philip/data/bully-pulpit-local`. Its secrets belong to the
+`Bully Pulpit Toolbox` 1Password item. It is a production-mode application with
+live provider credentials, but has `DEPLOYMENT_ROLE=parallel`: scheduled work,
+bulk newsletters and inbound phone/provider callbacks remain on Vercel.
+Never change Vercel domains, schedules or credentials as part of a local release.
+Deploy only an explicitly selected pushed commit; do not build from a development
+directory. The dashboard observes these Compose containers, while the heartbeat
+does not release them. Do not run `down -v` or include their databases in a cleanup.
+Cloudflare MCP manages the public hostname's remote tunnel ingress; the normalized
+Workflow endpoint deny in nginx is also required. The worker calls loopback inside
+the app container. Public access is intentional; existing app authentication
+protects subscriber/admin data. Blob and AI Gateway remain external services.
 
 The two font repositories have different hosting: `philipithomas/fonts` serves
 `fonts.philipithomas.com` on Vercel; its old `philipithomas-fonts` Mac deployment

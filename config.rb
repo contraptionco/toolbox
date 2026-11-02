@@ -234,6 +234,13 @@ module Config
   # from the Toolbox dashboard, which has its own LaunchAgent lifecycle.
   SYSTEM_SERVICES = []
 
+  # Explicitly released Compose applications, not heartbeat deployments. The
+  # dashboard observes these containers; it never starts, rebuilds or updates
+  # them. The parallel Bully Pulpit release follows a reviewed branch SHA.
+  COMPOSE_APPLICATIONS = [
+    { name: 'bully-pulpit', containers: ['bully-pulpit', 'bully-pulpit-postgres', 'bully-pulpit-proxy'] }
+  ].freeze
+
   #-----------------------------------------------------------------------------------
   # CLOUDFLARE TUNNEL CONFIGURATION - REQUIRED
   #-----------------------------------------------------------------------------------
