@@ -7,3 +7,5 @@ log_files.yml
 .heartbeat.lock*
 .runtime/
 .bundle/
+__pycache__/
+*.py[cod]

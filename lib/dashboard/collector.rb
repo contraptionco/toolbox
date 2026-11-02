@@ -140,7 +140,12 @@ module Dashboard
         host << dashboard
       end
       host << { name: 'cloudflare-tunnel', type: 'host', configured: true } if @config.const_defined?(:TUNNEL_CONFIG) && @config::TUNNEL_CONFIG
-      direct + git + host
+      compose = @config.const_defined?(:COMPOSE_APPLICATIONS) ? @config::COMPOSE_APPLICATIONS.flat_map do |item|
+        item.fetch(:containers).map do |name|
+          { name: name, type: 'docker', container_name: name, configured: true }
+        end
+      end : []
+      direct + git + compose + host
     end
 
     def host_process_status(name)
