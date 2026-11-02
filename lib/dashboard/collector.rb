@@ -94,26 +94,29 @@ module Dashboard
 
     def logs(source, lines: MAX_LOG_LINES)
       count = Integer(lines).clamp(1, MAX_LOG_LINES)
-      truncated = false
-      content = if @log_paths.key?(source)
-                  output, truncated = tail(@log_paths.fetch(source), LOG_BYTES)
-                  output
-                elsif source.is_a?(String) && source.start_with?('container:')
-                  name = source.delete_prefix('container:')
-                  raise UnknownLogSource, 'Unknown log source' unless name.match?(NAME)
+      raw_lines, truncated = if @log_paths.key?(source)
+                               output, clipped = tail(@log_paths.fetch(source), LOG_BYTES)
+                               [output.lines(chomp: true), clipped]
+                             elsif source.is_a?(String) && source.start_with?('container:')
+                               name = source.delete_prefix('container:')
+                               raise UnknownLogSource, 'Unknown log source' unless name.match?(NAME)
 
-                  container = inventory.find { |item| item[:name] == name && !item[:transient] }
-                  raise UnknownLogSource, 'Unknown log source' unless container
+                               container = inventory.find { |item| item[:name] == name && !item[:transient] }
+                               raise UnknownLogSource, 'Unknown log source' unless container
 
-                  command('docker', 'logs', '--tail', count.to_s, '--timestamps', container.fetch(:id),
-                          limit: LOG_BYTES, include_stderr: true)
-                else
-                  raise UnknownLogSource, 'Unknown log source'
-                end
-      raw_lines = content.lines(chomp: true)
-      truncated ||= raw_lines.length > count || content.include?(Core::CommandRunner::TRUNCATION_MARKER.strip)
-      { source: source, updated_at: timestamp, lines: raw_lines.last(count).map { |line| Redactor.line(line) },
-        truncated: truncated }
+                               docker_log_lines(container.fetch(:id), count)
+                             else
+                               raise UnknownLogSource, 'Unknown log source'
+                             end
+      truncated ||= raw_lines.length > count
+      safe_lines = raw_lines.last(count).map { |line| Redactor.line(line) }
+      # Keep the newest complete lines after sorting/redaction. Account for
+      # JSON escaping as well as UTF-8 so the final array is bounded too.
+      while JSON.generate(safe_lines).bytesize > LOG_BYTES
+        safe_lines.shift
+        truncated = true
+      end
+      { source: source, updated_at: timestamp, lines: safe_lines, truncated: truncated }
     rescue ArgumentError, TypeError
       raise UnknownLogSource, 'Invalid log request'
     end
@@ -157,16 +160,46 @@ module Dashboard
       raise Unavailable
     end
 
-    def command(*argv, limit: MAX_OUTPUT, include_stderr: false)
+    def command(*argv, limit: MAX_OUTPUT)
+      capture_streams(*argv, limit: limit).first
+    end
+
+    def capture_streams(*argv, limit:)
       output, stderr, status = @runner.capture3(*argv, timeout: 8, capture_limit: limit,
                                                env: { 'LC_ALL' => 'C', 'GIT_OPTIONAL_LOCKS' => '0', 'GIT_TERMINAL_PROMPT' => '0' },
                                                label: 'Dashboard read-only inspection')
       raise Unavailable, 'Inspection unavailable' unless status.success?
 
-      value = include_stderr ? "#{output}\n#{stderr}" : output
-      value.byteslice(0, limit).to_s.encode('UTF-8', invalid: :replace, undef: :replace, replace: '�')
+      [output, stderr].map do |value|
+        value.byteslice(0, limit).to_s.encode('UTF-8', invalid: :replace, undef: :replace, replace: '�')
+      end
     rescue Core::CommandRunner::StartError, Core::CommandRunner::TimeoutError
       raise Unavailable, 'Inspection unavailable'
+    end
+
+    def docker_log_lines(id, count)
+      streams = capture_streams('docker', 'logs', '--tail', count.to_s, '--timestamps', id, limit: LOG_BYTES)
+      marker = Core::CommandRunner::TRUNCATION_MARKER.strip
+      truncated = streams.any? { |stream| stream.include?(marker) }
+      entries = streams.each_with_index.flat_map do |stream, stream_index|
+        previous_timestamp = nil
+        stream.lines(chomp: true).each_with_index.filter_map do |line, line_index|
+          next if line == marker
+
+          # Docker timestamps each log entry. Multiline continuations inherit
+          # the preceding entry's time; untimestamped diagnostics sort first.
+          value = line[/\A(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2}))\s/, 1]
+          begin
+            previous_timestamp = Time.iso8601(value).to_r if value
+          rescue ArgumentError
+            # Invalid timestamps remain plain, redacted diagnostics.
+          end
+          [previous_timestamp || -1, stream_index, line_index, line]
+        end
+      end
+      # Equal timestamps retain per-stream order. Cross-stream ordering cannot
+      # be inferred more precisely than Docker's timestamp resolution.
+      [entries.sort_by { |entry| entry.first(3) }.map(&:last), truncated]
     end
 
     def collect(errors, source)

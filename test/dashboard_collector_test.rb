@@ -258,6 +258,45 @@ class DashboardCollectorTest < Minitest::Test
     assert_raises(Dashboard::Collector::UnknownLogSource) { @collector.logs('container:toolbox-op-test') }
   end
 
+  def test_docker_log_streams_merge_chronologically_before_selecting_latest_lines
+    stdout = "2026-11-02T20:00:03.000000001Z stdout three\n2026-11-02T20:00:04.000000001Z stdout four\n2026-11-02T20:00:06.000000001Z stdout six\n"
+    stderr = "2026-11-02T20:00:01.000000001Z stderr one\n2026-11-02T20:00:02.000000001Z stderr two\n2026-11-02T20:00:05.000000001Z stderr five\n"
+    @runner.add(['docker', 'logs', '--tail', '3', '--timestamps', POSTCARD_ID], stdout, stderr: stderr)
+    result = @collector.logs('container:postcard', lines: 3)
+    assert_equal ['stdout four', 'stderr five', 'stdout six'], result[:lines].map { |line| line.split(' ', 2).last }
+    assert result[:truncated]
+    assert_equal Dashboard::Collector::LOG_BYTES, @runner.calls.last.last[:capture_limit]
+  end
+
+  def test_docker_log_merge_preserves_nanoseconds_continuations_and_safe_utf8
+    stdout = "2026-11-02T20:00:00.000000002Z newest\ncontinued message\n".b
+    stderr = "not timestamped\n2026-11-02T20:00:00.000000001Z older\nbad\xFF\n".b
+    @runner.add(['docker', 'logs', '--tail', '6', '--timestamps', POSTCARD_ID], stdout, stderr: stderr)
+    result = @collector.logs('container:postcard', lines: 6)
+    assert_equal ['not timestamped', '2026-11-02T20:00:00.000000001Z older', 'bad�',
+                  '2026-11-02T20:00:00.000000002Z newest', 'continued message'], result[:lines]
+    assert result[:lines].all?(&:valid_encoding?)
+    refute result[:truncated]
+  end
+
+  def test_docker_log_byte_limit_applies_after_merge_and_reports_capture_truncation
+    log_line = ->(n) { "#{(@now + n).iso8601(9)} entry #{n}: #{'word ' * 290}\n" }
+    stdout = (80..159).map(&log_line).join
+    stderr = (0..79).map(&log_line).join
+    @runner.add(['docker', 'logs', '--tail', '200', '--timestamps', POSTCARD_ID], stdout, stderr: stderr)
+    result = @collector.logs('container:postcard')
+    assert_operator JSON.generate(result[:lines]).bytesize, :<=, Dashboard::Collector::LOG_BYTES
+    assert_includes result[:lines].last, 'entry 159:'
+    assert result[:truncated]
+    refute result[:lines].any? { |line| line.include?('entry 0:') }
+
+    @runner.add(['docker', 'logs', '--tail', '200', '--timestamps', POSTCARD_ID], "#{log_line.call(1)}#{Core::CommandRunner::TRUNCATION_MARKER}", stderr: log_line.call(2))
+    clipped = @collector.logs('container:postcard')
+    assert clipped[:truncated]
+    assert_equal 3, clipped[:lines].length
+    refute clipped[:lines].any? { |line| line == Core::CommandRunner::TRUNCATION_MARKER.strip }
+  end
+
   def test_large_line_is_bounded_and_does_not_return_partial_tail_prefix
     File.write(File.join(@directory, 'heartbeat.log'), "prefix #{'x' * (Dashboard::Collector::LOG_BYTES + 100)}\nretained\n")
     result = @collector.logs('heartbeat')
