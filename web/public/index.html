@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f3f0">
+  <meta name="color-scheme" content="light">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Toolbox">
+  <meta name="description" content="A private, read-only view of the Toolbox production host.">
+  <title>Toolbox · Machine room</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.philipithomas.com" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#overview">Skip to dashboard</a>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <a class="wordmark" href="/" aria-label="Toolbox home"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M4 12h24v15H4zM11 12V6h10v6M4 18h24M13 16v5h6v-5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter"/></svg>Toolbox<span class="wordmark-dot">.</span></a>
+      <nav aria-label="Dashboard"><a href="#overview">Overview</a><a href="#applications">Applications</a><a href="#logs">Logs</a></nav>
+      <span class="access-label"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 7V5a4 4 0 0 1 8 0v2M3 7h10v8H3z" stroke="currentColor" stroke-width="1.3"/></svg>Private <span>· Read only</span></span>
+    </div>
+  </header>
+
+  <main class="page" id="overview">
+    <div id="connection-notice" class="notice" role="status" hidden><span id="connection-message"></span><button id="reconnect" class="text-button" type="button">Sign in again ↗</button></div>
+    <section class="intro" aria-labelledby="page-title">
+      <div><p class="eyebrow">Contraption / Infrastructure</p><h1 id="page-title">The machine room.</h1><p class="intro-description">A little clarity on the Mac that keeps things running.</p></div>
+      <div class="live-summary"><span id="overall-status" class="status-line"><span class="status-dot neutral"></span>Connecting to the host</span><p id="last-updated">Waiting for the first reading</p><button id="refresh" type="button" class="text-button">Refresh <span aria-hidden="true">↻</span></button></div>
+    </section>
+
+    <div id="warnings" class="warnings" aria-live="polite"></div>
+    <section class="metrics" aria-label="Host metrics">
+      <article class="metric"><div class="metric-label">Disk <span id="disk-state" class="small-tag">Macintosh HD</span></div><div class="metric-number"><span id="disk-used">—</span><span class="unit">% full</span></div><div class="disk-meter" role="img" id="disk-meter" aria-label="Disk utilization unavailable"><span id="disk-occupied"></span><span id="disk-reclaimable"></span></div><p class="metric-detail"><strong id="disk-free">—</strong> immediately free</p><p class="metric-note"><span class="legend-square"></span><span id="disk-available">—</span> available with reclaimable space</p></article>
+      <article class="metric"><div class="metric-label">Memory <span id="memory-state" class="small-tag">Host</span></div><div class="metric-number"><span id="memory-used">—</span><span class="unit">GiB used</span></div><div class="meter" aria-hidden="true"><span id="memory-meter"></span></div><p class="metric-detail">Of <strong id="memory-total">—</strong> physical memory</p><p id="memory-note" class="metric-note">Current host memory usage</p></article>
+      <article class="metric"><div class="metric-label">Workload <span class="small-tag">1 / 5 / 15 min</span></div><div class="metric-number"><span id="load-current">—</span><span class="unit">load</span></div><div class="load-history" aria-label="Load averages"><span id="load-five">—</span><span id="load-fifteen">—</span><span class="load-caption">5 min / 15 min</span></div><p class="metric-detail"><strong id="cpu-count">—</strong> logical processors</p><p class="metric-note">Running + waiting tasks, not CPU percent</p></article>
+      <article class="metric"><div class="metric-label">Containers <span class="small-tag">Docker</span></div><div class="metric-number"><span id="running-count">—</span><span class="unit">running</span></div><div id="container-tally" class="container-tally" aria-hidden="true"></div><p class="metric-detail"><strong id="configured-running">—</strong> matched to Toolbox</p><p id="unconfigured-summary" class="metric-note">Checking the running inventory</p></article>
+    </section>
+
+    <section class="operations" aria-label="Deployment and host information">
+      <article class="deployment-panel"><div class="panel-top"><p class="eyebrow">Toolbox deployment</p><span id="deploy-badge" class="badge neutral">Checking</span></div><h2 id="deploy-title">Reading the heartbeat</h2><p id="deploy-message" class="muted">The host checks for deployment updates every minute.</p><dl class="deploy-facts"><div><dt>Checked</dt><dd id="deploy-checked">—</dd></div><div><dt>Last success</dt><dd id="deploy-success">—</dd></div><div><dt>Revision</dt><dd><span id="deploy-branch">—</span> <code id="deploy-commit">—</code></dd></div></dl></article>
+      <article class="host-panel"><p class="eyebrow">At home, at work</p><div class="host-heading"><svg viewBox="0 0 80 64" fill="none" aria-hidden="true"><rect x="6" y="12" width="68" height="42" rx="8" stroke="currentColor" stroke-width="1.5"/><path d="M6 40h68" stroke="currentColor" stroke-width="1.5"/><circle cx="63" cy="47" r="1.5" fill="currentColor"/><path d="M19 54v3M61 54v3" stroke="currentColor" stroke-width="1.5"/><path d="M34 25h12M40 19v12" stroke="currentColor" stroke-width="1.5"/></svg><div><h2 id="host-name">Mac mini</h2><p id="host-os" class="muted">Production host</p></div></div><dl class="host-facts"><div><dt>Uptime</dt><dd id="host-uptime">—</dd></div><div><dt>Access</dt><dd>Cloudflare Access</dd></div><div><dt>Control</dt><dd>Observation only</dd></div></dl><p class="host-storage" id="docker-storage">Docker storage is measured by allocated disk space.</p></article>
+    </section>
+
+    <section class="applications-section" id="applications" aria-labelledby="applications-title">
+      <div class="section-heading"><div><p class="eyebrow">What's running</p><h2 id="applications-title">Applications & services</h2></div><span id="application-count" class="section-caption">From the production configuration</span></div>
+      <div id="application-list" class="application-list"><p class="empty-state">Loading configured applications…</p></div>
+      <div class="container-heading"><h3>Docker inventory <span id="inventory-count" class="count"></span></h3><div class="segmented" role="group" aria-label="Filter Docker containers"><button type="button" class="selected" id="filter-all" aria-pressed="true">All</button><button type="button" id="filter-unconfigured" aria-pressed="false">Unconfigured <span id="filter-count">0</span></button></div></div>
+      <p class="inventory-note">Running containers outside the Toolbox configuration are flagged below. Expand a row for network and disk I/O.</p>
+      <div class="inventory-header" aria-hidden="true"><span>Container / Image</span><span>Status</span><span>CPU</span><span>Memory</span><span></span></div>
+      <div id="container-list" class="container-list"><p class="empty-state">Reading the Docker inventory…</p></div>
+      <p class="footnote">CPU is measured per logical processor and may exceed 100%. Network and disk I/O are cumulative for the container, not rates.</p>
+    </section>
+
+    <section class="logs-section" id="logs" aria-labelledby="logs-title">
+      <div class="section-heading"><div><p class="eyebrow">A closer look</p><h2 id="logs-title">Live logs</h2></div><span class="section-caption">Recent output. No commands.</span></div>
+      <div class="log-shell"><div class="log-toolbar"><label for="log-source">Source</label><select id="log-source" disabled><option>Loading sources…</option></select><span id="log-status" class="log-status">Waiting</span><button id="pause-logs" type="button" class="log-button" aria-pressed="false" disabled>Pause</button><button id="copy-logs" type="button" class="log-button" disabled>Copy</button></div><div class="log-content"><pre id="log-output" tabindex="0" aria-label="Recent log output">Waiting for a log source…</pre></div><div class="log-footer"><span id="log-detail">Up to 100 recent lines · refreshes every 5 seconds</span><label><input type="checkbox" id="follow-logs" checked> Follow output</label></div></div>
+      <p class="footnote">Logs are redacted on the host and never saved for offline use. Pause to inspect a moment in time.</p>
+    </section>
+
+    <footer class="page-footer"><div><a class="footer-wordmark" href="#overview">Toolbox.</a><p>A view into the machine. Nothing to accidentally switch off.</p></div><details class="install-help"><summary>Keep it on your iPhone <span aria-hidden="true">↗</span></summary><p>Open this page in Safari, tap Share, then <strong>Add to Home Screen</strong>. Cloudflare may ask you to sign in again in the installed app. Live readings need a connection.</p><button id="install-app" class="text-button" type="button" hidden>Install Toolbox ↗</button></details><a class="sign-out" href="/cdn-cgi/access/logout" id="sign-out">Sign out ↗</a></footer>
+  </main>
+</body>
+</html>

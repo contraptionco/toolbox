@@ -125,11 +125,15 @@ class HeartbeatScriptTest < Minitest::Test
   end
 
   def heartbeat_env(repo)
-    {
+    # The fixture's temporary HOME intentionally selects macOS's system Ruby.
+    # Do not inject the dashboard test bundle from another Ruby installation.
+    clean_bundle = ENV.keys.grep(/\ABUNDLE_/).to_h { |key| [key, nil] }
+    clean_bundle.merge(
+      'RUBYOPT' => nil, 'RUBYLIB' => nil,
       'TOOLBOX_REPO_DIR' => repo,
       'TOOLBOX_PRODUCTION_REPO_DIR' => repo,
       'TOOLBOX_HEARTBEAT_LOG' => File.join(repo, 'heartbeat.log')
-    }
+    )
   end
 
   def assert_no_heartbeat_effects(repo)

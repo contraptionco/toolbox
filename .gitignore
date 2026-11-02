@@ -6,3 +6,4 @@ log_files.yml
 *_backup.last_success.txt
 .heartbeat.lock*
 .runtime/
+.bundle/

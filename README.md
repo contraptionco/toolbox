@@ -38,6 +38,64 @@ This toolbox is built with the following principles in mind:
 - **Heartbeat monitoring**: Optional uptime monitoring
 - **Lock screen on boot**: Secure your server with automatic screen locking after reboot
 - **Complex Git Service Management**: Supports services requiring initial setup scripts and managed via their own Docker Compose.
+- **Private dashboard**: Native host metrics, deployment status, Docker inventory,
+  container metrics and redacted live logs behind Cloudflare Access.
+
+## Dashboard
+
+[toolbox.contraption.co](https://toolbox.contraption.co) is a read-only view of the
+Mac mini. It shows disk capacity (including the distinction between immediately
+free and reclaimable space), memory, load, uptime, heartbeat status, configured
+applications, and running or stopped Docker containers. Unexpected running
+containers are flagged. Expand a container for CPU, memory, network, block I/O,
+restart count and recent logs.
+
+The web service runs natively in Ruby on `127.0.0.1:4178`; running it inside Docker
+would report Docker's Linux VM as the host. Toolbox manages its separate
+`co.contraption.toolbox.dashboard` LaunchAgent and installs the locked dashboard
+gems under `.runtime/dashboard/gems`. Application containers and the shared
+PostgreSQL database are not dependencies of the UI. Netdata remains installed.
+
+Cloudflare Access is the only login. The existing Toolbox UI application uses the
+same private allow policy as Junk Drawer. The tunnel connector and Ruby origin
+both verify the Access application token. There are no mutation or command
+endpoints. `/healthz` contains only readiness and the loaded revision; other
+routes require a valid token. Host logs are bounded and conservatively redacted,
+but may still contain sensitive application output and remain private.
+
+On an iPhone, open the dashboard in Safari, sign in through Cloudflare, then use
+**Share → Add to Home Screen**. The web app has its own icons and standalone
+display. Offline mode shows a reconnect message; metrics, logs and authentication
+responses are never saved for offline use. Current metrics refresh every ten
+seconds and logs every five seconds while visible. History is not retained.
+
+### Develop and verify the dashboard
+
+Use a separate development clone as described in [AGENTS.md](AGENTS.md):
+
+```sh
+bundle config set --local path .runtime/bundle
+bundle install
+ruby web/server.rb --demo
+```
+
+Open `http://127.0.0.1:4179` for synthetic host/container/log fixtures. Demo mode
+cannot read production metrics. Unit tests use fake command runners, temporary
+files and generated signing keys, so they do not need Docker or Cloudflare:
+
+```sh
+ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
+zsh -n heartbeat.sh
+node --check web/public/app.js
+node --check web/public/sw.js
+```
+
+For an authorized rollout, merge a verified PR and let the heartbeat update
+production. Check the native origin's `/healthz`, verify anonymous public requests
+reach the Access login, then exercise the authenticated UI and API. This tunnel's
+**remote configuration overrides `config.yml`**: fetch and edit only the intended
+remote ingress rule through Cloudflare MCP, preserving unrelated routes and the
+Access policy. Do not expose the origin before Access is confirmed.
 
 ## Requirements
 

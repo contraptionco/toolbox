@@ -6,7 +6,13 @@ ingress:
   - hostname: toolbox-ssh.contraption.co
     service: tcp://localhost:22
   - hostname: toolbox.contraption.co
-    service: http://localhost:19999
+    service: http://127.0.0.1:4178
+    originRequest:
+      access:
+        required: true
+        teamName: contraptionco
+        audTag:
+          - 1f75d7dd8a314566d75b772f650152a05639eb9c3fb187166f653526c0d14753
   - hostname: telegraph.contraption.co
     service: http_status:410
   - hostname: write.contraption.co
