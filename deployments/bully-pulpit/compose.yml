@@ -11,7 +11,9 @@ services:
     image: postgres:17-bookworm@sha256:839fbb5a4942a7758dd93e18b42ea5649807491a0545b5eeeb8f0b8bb11857a5
     container_name: bully-pulpit-postgres
     restart: unless-stopped
-    env_file: ${BULLY_RUNTIME_DIR:?set the private runtime directory}/secrets/postgres.env
+    env_file:
+      - path: ${BULLY_RUNTIME_DIR:?set the private runtime directory}/secrets/postgres.env
+        format: raw
     volumes:
       - ${BULLY_RUNTIME_DIR}/postgres:/var/lib/postgresql/data
     shm_size: 128mb
@@ -29,7 +31,9 @@ services:
     container_name: bully-pulpit
     restart: unless-stopped
     init: true
-    env_file: ${BULLY_RUNTIME_DIR}/secrets/app.env
+    env_file:
+      - path: ${BULLY_RUNTIME_DIR}/secrets/app.env
+        format: raw
     environment:
       NODE_ENV: production
       APP_RUNTIME: toolbox
