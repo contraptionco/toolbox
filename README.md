@@ -54,7 +54,9 @@ The web service runs natively in Ruby on `127.0.0.1:4178`; running it inside Doc
 would report Docker's Linux VM as the host. Toolbox manages its separate
 `co.contraption.toolbox.dashboard` LaunchAgent and installs the locked dashboard
 gems under `.runtime/dashboard/gems`. Application containers and the shared
-PostgreSQL database are not dependencies of the UI. Netdata remains installed.
+PostgreSQL database are not dependencies of the UI. Netdata and its scheduled
+log rotation are retired; the dashboard reads host metrics directly. Existing
+Netdata files and metric history are preserved.
 
 Cloudflare Access is the only login. The existing Toolbox UI application uses the
 same private allow policy as Junk Drawer. The tunnel connector and Ruby origin

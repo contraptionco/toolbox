@@ -230,18 +230,9 @@ module Config
   # SYSTEM SERVICES - CUSTOMIZE THESE BASED ON YOUR NEEDS
   #-----------------------------------------------------------------------------------
 
-  # System-level services to manage (not in Docker)
-  SYSTEM_SERVICES = [
-    # Netdata monitoring (MODIFY OR REMOVE if not needed)
-    {
-      name: 'netdata',                                       # Service name
-      type: 'system',                                        # Service type
-      cmd: '/opt/homebrew/opt/netdata/sbin/netdata',         # Command path (CHANGE if path differs)
-      detection: 'pgrep -f "/opt/homebrew/opt/netdata/sbin/netdata"', # How to detect if running
-      start_cmd: '/opt/homebrew/opt/netdata/sbin/netdata -D' # Command to start the service
-      # Retained for host monitoring; the Toolbox dashboard uses port 4178.
-    }
-  ]
+  # Additional native services. Netdata is retired; host metrics come directly
+  # from the Toolbox dashboard, which has its own LaunchAgent lifecycle.
+  SYSTEM_SERVICES = []
 
   #-----------------------------------------------------------------------------------
   # CLOUDFLARE TUNNEL CONFIGURATION - REQUIRED

@@ -195,6 +195,16 @@ class DashboardCollectorTest < Minitest::Test
     refute_includes JSON.generate(failed), 'secret diagnostic'
   end
 
+  def test_retired_native_services_are_not_listed_or_probed
+    @config::SYSTEM_SERVICES.clear
+    collector = Dashboard::Collector.new(repo_dir: @directory, config: @config, runner: @runner,
+                                         clock: -> { @now }, platform: 'arm64-darwin', hostname: 'Mac mini')
+    result = collector.snapshot
+    refute result[:applications].any? { |app| app[:name] == 'netdata' }
+    refute @runner.calls.any? { |argv, _| argv == ['/usr/bin/pgrep', '-x', 'netdata'] }
+    assert_empty result[:errors]
+  end
+
   def test_invalid_docker_json_types_cannot_escape_safe_errors
     [[], nil, 'secret', 7].each do |invalid|
       @runner.add(['docker', 'ps', '-a', '--no-trunc', '--format', Dashboard::Collector::PS_FORMAT], JSON.generate(invalid))
