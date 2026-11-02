@@ -7,6 +7,18 @@ invokes the heartbeat from `/Users/philip/code/toolbox` every minute.
 Postcard and its PostgreSQL database are the critical application services on this
 Mac. Bully Pulpit is also critical, but runs on Vercel; preserve its local
 checkouts and development work without treating them as Mac-hosted production.
+
+The two font repositories have different hosting: `philipithomas/fonts` serves
+`fonts.philipithomas.com` on Vercel; its old `philipithomas-fonts` Mac deployment
+is retired. `contraptionco/fonts` still serves `fonts.contraption.co` from the
+configured `fonts` container on port 3002. Trivet uses its Helvetica Now and
+TX-02 files, which are absent from the personal Vercel font deployment. Keep
+that service and checkout. QuesoGPT also remains Mac-hosted on port 3001 at
+`quesogpt.contraption.co`; do not assume it has moved to Vercel.
+The wedding site also remains Mac-hosted: `philipandemma.com` and
+`www.philipandemma.com` route to `wedding-next` on port 3006. Preserve its service
+and checkout until the user explicitly retires or migrates it.
+
 Ghost, Booklet, Junk Drawer, Plausible (including its dedicated PostgreSQL and
 ClickHouse databases), Netdata, and the Signal proxy are retired. Do not recreate
 their services or data, Ghost backup automation, or Netdata startup/log-rotation
