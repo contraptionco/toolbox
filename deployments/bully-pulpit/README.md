@@ -1,8 +1,10 @@
 # Parallel Bully Pulpit hosting
 
-`https://bully-pulpit.contraption.co` runs a production-mode copy of Bully Pulpit
-with live provider credentials. Vercel continues serving `www.philipithomas.com`.
-This is an explicit release, independent of Toolbox's heartbeat.
+This configuration prepares a production-mode copy of Bully Pulpit at
+`https://bully-pulpit.contraption.co`, with live provider credentials. Initial
+launch is pending a verified production Neon copy and the release checks below.
+Vercel continues serving `www.philipithomas.com`. This is an explicit release,
+independent of Toolbox's heartbeat.
 
 The Compose project contains `bully-pulpit`, `bully-pulpit-postgres`, and
 `bully-pulpit-proxy`. Only the proxy publishes a port, on `127.0.0.1:4244`.
@@ -34,19 +36,76 @@ dump. Do not discard live local changes by rerunning the initial copy.
 
 ## Release
 
-1. Test and push both feature branches; keep full PRs open and verify CI.
-2. Provision private runtime files from 1Password. Initialize/copy the dedicated
-   databases. Confirm the copy report at `database-copy.json`.
-3. From a clean pushed Toolbox branch, run
-   `python3 deployments/bully-pulpit/deploy.py --commit <full-pushed-app-sha> --build-only`.
-   The app branch defaults to `feat/toolbox-self-hosting`; the command verifies
-   the branch's remote SHA and builds a separate immutable source checkout.
-4. Run the same command with `--apply` after review. It applies local migrations,
-   bootstraps the pinned Workflow backend, and starts only this Compose project.
-5. Verify the real homepage, a photo, search, optimized images, admin rejection,
+Run these commands from a separate, clean Toolbox checkout under
+`/Users/philip/development/`. The initial bootstrap starts PostgreSQL before the
+database commands; it does not require the application or proxy to be running.
+
+1. Test and push both feature branches; keep full PRs open and verify CI. Select
+   the full pushed application commit for this release.
+2. Provision the private runtime directory and render its local credentials:
+
+   ```sh
+   python3 deployments/bully-pulpit/secrets.py
+   ```
+
+3. Build the selected application commit:
+
+   ```sh
+   BULLY_APP_COMMIT='<full-pushed-app-sha>'
+   python3 deployments/bully-pulpit/deploy.py --commit "$BULLY_APP_COMMIT" --build-only
+   ```
+
+   Continue only when the build succeeds. This command verifies that the
+   Toolbox checkout is clean, its remote is the expected repository, and its
+   HEAD matches the pushed branch. It also verifies the application's remote
+   SHA and builds a separate immutable source checkout. The application branch
+   defaults to `feat/toolbox-self-hosting`; pass `--branch` to both release
+   commands when selecting another branch.
+4. From that same verified Toolbox checkout, start only the dedicated database
+   with the exact image ID produced by the successful build. Keep the checkout
+   and selected commit unchanged between these commands:
+
+   ```sh
+   BULLY_BOOTSTRAP_IMAGE="$(docker image inspect --format '{{.Id}}' "bully-pulpit-local:$BULLY_APP_COMMIT")"
+   BULLY_RUNTIME_DIR=/Users/philip/data/bully-pulpit-local \
+     BULLY_IMAGE="$BULLY_BOOTSTRAP_IMAGE" \
+     docker compose -f deployments/bully-pulpit/compose.yml up -d --wait --no-deps postgres
+   ```
+
+   The selected Compose file pins PostgreSQL 17 and its dedicated data directory.
+   `--no-deps postgres` starts only this service. Keep an existing healthy
+   dedicated database; do not recreate its data to repeat the bootstrap.
+5. Initialize the dedicated roles/databases, then copy the production Neon
+   database. Before `copy`, provision the explicit production connection URL as
+   `secrets/source-database.json` under the runtime directory, containing
+   `{"url":"<production-Neon-URL>"}` with mode0600. `secrets.py` renders the local
+   runtime credentials; it does not provision this source credential. Obtain
+   the source from the production secret, never a development database or an
+   environment-file fallback, and keep its value out of shell history/output.
+
+   ```sh
+   python3 deployments/bully-pulpit/database.py init
+   python3 deployments/bully-pulpit/database.py copy
+   ```
+
+   Continue only after `copy` reports `verified: true` and writes
+   `/Users/philip/data/bully-pulpit-local/database-copy.json`. The copy refuses
+   an occupied target and verifies every table count against the exported source
+   snapshot. A missing source credential blocks this step and the release.
+   After a verified initial copy, skip this copy step for subsequent releases.
+6. Apply the same reviewed application commit:
+
+   ```sh
+   python3 deployments/bully-pulpit/deploy.py --commit "$BULLY_APP_COMMIT" --apply
+   ```
+
+   The command requires the verified copy marker, freezes the selected Compose
+   and proxy configuration, backs up both local databases, applies migrations,
+   bootstraps the pinned Workflow backend, and starts this Compose project.
+7. Verify the real homepage, a photo, search, optimized images, admin rejection,
    missing bot proof rejection, and Workflow smoke/restart behavior at the local
    proxy using `Host: bully-pulpit.contraption.co`.
-6. Use Cloudflare MCP to fetch the current remote tunnel configuration, preserve
+8. Use Cloudflare MCP to fetch the current remote tunnel configuration, preserve
    unrelated rules, and change only this hostname to `http://127.0.0.1:4244` with
    a preceding `^/\.well-known/workflow`403 rule. Keep `config.yml` consistent.
    Verify the public site and that Vercel/Postcard remain healthy.
