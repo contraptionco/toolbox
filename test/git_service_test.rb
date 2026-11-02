@@ -5,6 +5,7 @@ require_relative '../lib/git_service'
 class GitServiceTest < Minitest::Test
   FakeStatus = Struct.new(:success?)
   ReleaseResponse = Struct.new(:body)
+  IMAGE_ID = "sha256:#{'a' * 64}"
 
   class FakeHttp
     attr_accessor :use_ssl, :open_timeout, :read_timeout, :write_timeout
@@ -12,26 +13,6 @@ class GitServiceTest < Minitest::Test
     def request(_request)
       ReleaseResponse.new('{"tag_name":"v1.2.3"}')
     end
-  end
-
-  def test_branch_pull_is_explicitly_fast_forward_only
-    commands = []
-    runner = lambda do |*arguments, **_options|
-      commands << arguments
-      ['', '', FakeStatus.new(true)]
-    end
-
-    Dir.mktmpdir do |directory|
-      capture_output do
-        Core::CommandRunner.stub(:capture3, runner) do
-          Core::GitService.pull_latest(directory, 'main')
-        end
-      end
-    end
-
-    assert_includes commands, ['git', 'fetch', 'origin', 'main']
-    assert_includes commands, ['git', 'checkout', 'main']
-    assert_includes commands, ['git', 'pull', '--ff-only', 'origin', 'main']
   end
 
   def test_postcard_is_pinned_and_has_a_healthcheck
@@ -66,9 +47,9 @@ class GitServiceTest < Minitest::Test
       service[:local_path] = directory
       service[:deployment_marker_path] = File.join(directory, 'marker')
       capture_output do
-        Core::GitService.stub(:has_changes?, false) do
-          Core::GitService.stub(:current_head, 'head') do
-            Core::GitService.stub(:build_docker_image, true) do
+        Core::GitService.stub(:prepare_release, { head: 'head', cloned: false }) do
+          Core::GitService.stub(:with_release_snapshot, ->(path, _head, &block) { block.call(path) }) do
+            Core::GitService.stub(:build_docker_image, IMAGE_ID) do
               Core::GitService.stub(:image_exists?, true) do
                 Core::DockerService.stub(:container_running?, false) do
                   Core::DockerService.stub(:stop_container, ->(name) { events << [:stop, name] }) do
@@ -91,6 +72,7 @@ class GitServiceTest < Minitest::Test
     command = nil
     runner = lambda do |*arguments, **_options|
       command = arguments
+      File.write(arguments.fetch(arguments.index('--iidfile') + 1), IMAGE_ID)
       ['', '', FakeStatus.new(true)]
     end
 
@@ -100,7 +82,9 @@ class GitServiceTest < Minitest::Test
       end
     end
 
-    assert_equal ['docker', 'build', '-t', 'postcard', '.'], command
+    assert_equal ['docker', 'build'], command.take(2)
+    assert_equal ['-t', 'postcard', '.'], command.last(3)
+    assert_includes command, '--iidfile'
     refute_includes command.join(' '), 'SECRET'
     refute_includes command, '--build-arg'
   end
@@ -124,10 +108,10 @@ class GitServiceTest < Minitest::Test
       started_config = nil
 
       capture_output do
-        Core::GitService.stub(:has_changes?, false) do
-          Core::GitService.stub(:current_head, 'head') do
+        Core::GitService.stub(:prepare_release, { head: 'head', cloned: false }) do
+          Core::GitService.stub(:with_release_snapshot, ->(path, _head, &block) { block.call(path) }) do
             Core::GitService.stub(:runtime_env_path, runtime_env) do
-              Core::GitService.stub(:build_docker_image, true) do
+              Core::GitService.stub(:build_docker_image, IMAGE_ID) do
                 Core::GitService.stub(:image_exists?, true) do
                   Core::DockerService.stub(:container_running?, false) do
                     Core::DockerService.stub(:stop_container, true) do
@@ -170,8 +154,8 @@ class GitServiceTest < Minitest::Test
         raise 'build failed' if attempts == 1
       end
 
-      Core::GitService.stub(:has_changes?, false) do
-        Core::GitService.stub(:current_head, 'same-head') do
+      Core::GitService.stub(:prepare_release, { head: 'head', cloned: false }) do
+        Core::GitService.stub(:with_release_snapshot, ->(path, _head, &block) { block.call(path) }) do
           Core::GitService.stub(:run_build_command, builder) do
             assert_raises(RuntimeError) { Core::GitService.update_git_service(service) }
             refute File.exist?(service[:deployment_marker_path])
@@ -205,9 +189,9 @@ class GitServiceTest < Minitest::Test
       }
 
       capture_output do
-        Core::GitService.stub(:has_changes?, false) do
-          Core::GitService.stub(:current_head, 'same-head') do
-            Core::GitService.stub(:build_docker_image, true) do
+        Core::GitService.stub(:prepare_release, { head: 'head', cloned: false }) do
+          Core::GitService.stub(:with_release_snapshot, ->(path, _head, &block) { block.call(path) }) do
+            Core::GitService.stub(:build_docker_image, IMAGE_ID) do
               Core::GitService.stub(:image_exists?, true) do
                 Core::DockerService.stub(:container_running?, false) do
                   Core::DockerService.stub(:stop_container, true) do
@@ -249,7 +233,7 @@ class GitServiceTest < Minitest::Test
       status_runner = ->(*_arguments, **_options) { ["container-id\n", '', FakeStatus.new(true)] }
 
       capture_output do
-        Core::GitService.stub(:current_head, 'head') do
+        Core::GitService.stub(:prepare_release, { head: 'head', cloned: false }) do
           Core::GitService.stub(:run_command, status_runner) do
             Core::GitService.stub(:docker_compose_up, ->(path, force_recreate:) { compose_calls << [path, force_recreate] }) do
               Core::GitService.update_git_service(service)

@@ -15,9 +15,9 @@ class HeartbeatUpdateTest < Minitest::Test
   class FakeRunner
     attr_reader :commands, :run_options
 
-    def initialize(dirty: false)
+    def initialize(dirty: false, branch: 'main')
       @commands = []
-      @branch = 'feature'
+      @branch = branch
       @head = 'old-head'
       @remote = 'new-head'
       @dirty = dirty
@@ -51,7 +51,7 @@ class HeartbeatUpdateTest < Minitest::Test
     end
   end
 
-  def test_switches_to_verified_main_and_bounds_toolbox_run
+  def test_updates_verified_main_and_bounds_explicit_production_run
     runner = FakeRunner.new
     updater = Core::HeartbeatUpdate.new(
       '/toolbox',
@@ -74,13 +74,25 @@ class HeartbeatUpdateTest < Minitest::Test
     commands = runner.commands.map(&:first)
     assert_includes commands, ['git', 'fetch', '--no-tags', 'origin',
                                'refs/heads/main:refs/remotes/origin/main']
-    switch_index = commands.index(['git', 'switch', 'main'])
-    merge_index = commands.index(['git', 'merge', '--ff-only', 'refs/remotes/origin/main'])
-    assert_operator switch_index, :<, merge_index
+    refute commands.any? { |command| command.first(2) == %w[git switch] }
+    assert_includes commands, ['git', 'merge', '--ff-only', 'refs/remotes/origin/main']
     assert_equal Core::HeartbeatUpdate::TOOLBOX_TIMEOUT, runner.run_options.last[:timeout]
     assert_operator Core::HeartbeatUpdate::TOOLBOX_TIMEOUT, :>=, 24 * 60 * 60
-    assert_equal ['code_changed'], runner.run_options.first.last(1)
+    assert_equal ['--production', 'code_changed'], runner.run_options.first.last(2)
     assert_equal({ 'OP_SERVICE_ACCOUNT_TOKEN' => 'fixture-service-token' }, runner.run_options.last[:env])
+  end
+
+  def test_refuses_an_unexpected_branch_before_fetch_or_service_run
+    runner = FakeRunner.new(branch: 'feature')
+    updater = Core::HeartbeatUpdate.new(
+      '/toolbox', command_runner: runner, disk_monitor: FakeDiskMonitor.new, stderr: StringIO.new
+    )
+
+    error = assert_raises(RuntimeError) { updater.update_and_run }
+
+    assert_includes error.message, 'not main'
+    assert_equal [['git', 'symbolic-ref', '--quiet', '--short', 'HEAD']], runner.commands.map(&:first)
+    assert_nil runner.run_options
   end
 
   def test_refuses_dirty_checkout_before_switch_or_pull
@@ -95,7 +107,7 @@ class HeartbeatUpdateTest < Minitest::Test
     error = assert_raises(RuntimeError) { updater.update }
 
     assert_includes error.message, 'dirty'
-    refute runner.commands.any? { |command, _options| command.first(2) == %w[git switch] }
+    refute runner.commands.any? { |command, _options| %w[switch fetch merge].include?(command[1]) }
     assert_nil runner.run_options
   end
 end
