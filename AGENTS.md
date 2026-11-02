@@ -7,9 +7,18 @@ invokes the heartbeat from `/Users/philip/code/toolbox` every minute.
 Postcard and its PostgreSQL database are the critical application services on this
 Mac. Bully Pulpit is also critical, but runs on Vercel; preserve its local
 checkouts and development work without treating them as Mac-hosted production.
-Ghost, Booklet, and Junk Drawer are retired. Do not recreate their services or
-data, or Ghost backup automation, during maintenance. Existing domain redirects remain
+Ghost, Booklet, Junk Drawer, and Plausible (including its dedicated PostgreSQL and
+ClickHouse databases) are retired. Do not recreate their services or data, or
+Ghost backup automation, during maintenance. Existing domain redirects remain
 intentional. Preserve remote backup history unless the user authorizes removal.
+
+Cloudflare manages this tunnel's active ingress remotely. The remote configuration
+overrides `config.yml` and includes additional routes. For an authorized route
+change, fetch the current remote configuration, preserve unrelated settings,
+apply only the reviewed change, and verify the public response. Keep the local
+reference consistent, but never replace the remote configuration wholesale with
+the local file. Never print tunnel credentials, environment values, or the full
+LaunchAgent state, which can contain secrets.
 
 ## Use a separate checkout
 

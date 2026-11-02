@@ -111,41 +111,6 @@ module Config
       auto_update: true                                      # Whether to auto-update when repo changes
     },
     {
-      name: 'plausible',                                     # Service name
-      repo_url: 'https://github.com/plausible/community-edition', # Repo URL (public repo)
-      local_path: "#{DATA_DIR}/plausible/plausible-ce",      # Where to clone the repo
-      branch: 'v3.1.0',                                      # Specific branch or tag to use
-      # Environment configuration from 1Password (CHANGE THIS to your 1Password item)
-      env_config: { type: '1password', item: 'Plausible', field: 'env' },
-      # Custom docker-compose override
-      compose_override: {
-        services: {
-          plausible_db: {
-            logging: {
-              driver: 'local',
-              options: { 'max-size' => '10m', 'max-file' => '3' }
-            }
-          },
-          plausible_events_db: {
-            logging: {
-              driver: 'local',
-              options: { 'max-size' => '10m', 'max-file' => '3' }
-            }
-          },
-          plausible: {
-            ports: ['127.0.0.1:8000:8000'], # Port mapping for the service
-            # Cloudflare connects to port 8000 to serve:
-            # telegraph.contraption.co
-            logging: {
-              driver: 'local',
-              options: { 'max-size' => '10m', 'max-file' => '3' }
-            }
-          }
-        }
-      },
-      auto_update: false # Whether to auto-update when repo changes
-    },
-    {
       name: 'quesogpt',                                      # Service name
       repo_url: 'git@github.com:contraptionco/quesogpt.git', # Git repo
       local_path: "#{CODE_DIR}/quesogpt",                    # Where to clone the repo

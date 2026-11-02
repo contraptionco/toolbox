@@ -8,7 +8,7 @@ ingress:
   - hostname: toolbox.contraption.co
     service: http://localhost:19999
   - hostname: telegraph.contraption.co
-    service: http://localhost:8000
+    service: http_status:410
   - hostname: write.contraption.co
     service: http_status:410
   - hostname: postcard.contraption.co

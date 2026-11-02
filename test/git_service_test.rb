@@ -22,16 +22,6 @@ class GitServiceTest < Minitest::Test
     assert_includes postcard.dig(:container_config, :healthcheck, :test), '/.postcard'
   end
 
-  def test_plausible_compose_services_have_bounded_logs
-    plausible = Config::GIT_SERVICES.find { |service| service[:name] == 'plausible' }
-
-    %i[plausible_db plausible_events_db plausible].each do |name|
-      logging = plausible.dig(:compose_override, :services, name, :logging)
-      assert_equal 'local', logging[:driver]
-      assert_equal({ 'max-size' => '10m', 'max-file' => '3' }, logging[:options])
-    end
-  end
-
   def test_stopped_git_service_container_is_removed_before_start
     events = []
     service = {
