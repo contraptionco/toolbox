@@ -153,6 +153,29 @@ The toolbox relies on 1Password CLI for secure credential storage:
 
 For detailed setup instructions, follow the [official 1Password CLI guide](https://developer.1password.com/docs/cli/get-started/).
 
+### Service account request limits
+
+The heartbeat runs every minute, but it does not need to retrieve unchanged secrets
+that often. With `OP_SERVICE_ACCOUNT_TOKEN` set, Toolbox caches successful field
+reads and a successful authentication check for one hour in
+`.runtime/one-password/`. The directory has mode `0700` and its files have mode
+`0600`; the cache contains plaintext secrets and must remain private and outside
+Git and Docker build contexts. Entries are scoped to the token, vault, backend,
+item, and field. The token itself is not saved in this cache. Interactive CLI
+sign-in without a service account remains uncached.
+
+Secret changes and service account revocation can take up to one hour to reach
+Toolbox. An expired entry must be refreshed successfully before use; authentication,
+permission, and rate-limit errors do not fall back to expired credentials. The
+cache cannot populate until 1Password accepts the first request.
+
+For an authorized credential rotation, run the production heartbeat with
+`TOOLBOX_OP_REFRESH=1` in the usual service-account environment. This bypasses fresh
+entries and replaces them only after successful retrieval. A failed refresh
+invalidates that entry. `TOOLBOX_OP_CACHE=0` disables cache reads and writes for a
+run; leaving it disabled for scheduled runs can exhaust the daily request quota.
+Keep the normal production checkout and intent guards in place for these runs.
+
 ## Setting up Cloudflare Tunnel
 
 Cloudflare Tunnel provides a secure way to expose your home server to the internet without opening ports. For a detailed guide on setting up Cloudflare Tunnel on a Mac, follow [Sam Rhea's excellent guide](https://web.archive.org/web/20241113053641/https://blog.samrhea.com/posts/2021/zero-trust-mac-browser/).
@@ -220,6 +243,30 @@ GIT_SERVICES = [
   }
 ]
 ```
+
+### Manual
+
+Manual runs at `https://manual.ilic.nyc` from the `philipithomas/manual` repository's
+`main` branch. Toolbox builds the `tools` and `runner` Dockerfile targets as
+`manual-migrate` and `manual-app` inside a temporary snapshot of the verified
+release. Compose uses those local images, runs migrations and the idempotent
+seed, then starts the app on `127.0.0.1:3007`. The app and migration containers
+join the existing `toolbox_network`; no additional PostgreSQL server is created.
+
+The `ENV` field of the `manual` item in the configured 1Password vault contains
+the full multiline production environment. Toolbox writes it to Manual's ignored
+`.env` with owner-only permissions. Compose parses the dotenv values, including
+quoted values; do not split this field into Docker build arguments. Set
+`DATABASE_URL` to the existing database connection string, using `postgres` as
+the hostname when targeting Toolbox's PostgreSQL container. The database itself
+must exist before deployment. The remaining variables are documented in Manual's
+`.env.production.example` and README. Secrets are supplied only at runtime.
+
+The local `config.yml` records the `manual.ilic.nyc` route to port 3007. Cloudflare
+manages this tunnel's active ingress remotely, so the corresponding DNS and
+remote ingress entry must also be configured while preserving all existing
+routes. Verify the public sign-in page and the application flow after deployment,
+as well as the app's `/api/health` endpoint.
 
 ## Heartbeat script (auto-updates)
 
