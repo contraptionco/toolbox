@@ -268,6 +268,65 @@ remote ingress entry must also be configured while preserving all existing
 routes. Verify the public sign-in page and the application flow after deployment,
 as well as the app's `/api/health` endpoint.
 
+### PostgreSQL backups, including Manual
+
+Manual's production `DATABASE_URL` points to the `manual` database in Toolbox's
+existing `postgres` container. The enabled `postgres_backup` script runs
+`pg_dumpall` against that entire cluster, so it includes Manual, Postcard, the
+other databases, and cluster roles. Manual does not need a second backup job or
+another copy of its connection string. If `DATABASE_URL` moves to a different
+PostgreSQL server, this coverage must be updated before the move.
+
+The heartbeat checks the job every minute. A successful backup starts the next
+24-hour interval; a failed export or upload does not advance the success marker.
+The export uses pipeline failure propagation, an owner-only temporary file, and
+a complete gzip integrity check that rejects empty or truncated exports before
+upload. PostgreSQL provides each database's consistent dump snapshot; this is
+not one atomic snapshot across every database in the cluster.
+
+Backups use the existing `toolbox` 1Password item's `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `S3_BUCKET` fields. Objects have the key
+`YYYY-MM-DD/postgres-YYYYMMDDTHHMMSSZ.sql.gz`, with the directory date in
+`America/New_York` and the filename timestamp in UTC. The script does not delete
+remote snapshots or change bucket lifecycle rules. Retention is governed by any
+existing S3 lifecycle configuration; inspect it with an authorized account
+rather than assuming the backup writer can read it. Preserve existing history.
+
+`postgres_backup.last_success.txt` records the last completed upload in UTC.
+`postgres_backup.lock.txt` prevents concurrent backups; an active lock also
+blocks a forced run. Locks older than one hour follow the existing stale-lock
+recovery behavior. Failed and partial exports are removed, and a successful
+upload removes the local temporary dump.
+
+For an explicitly authorized snapshot after a migration or import, run only the
+backup entrypoint from the clean, verified production checkout, with the same
+Ruby and secret environment as the heartbeat:
+
+```sh
+cd ~/code/toolbox
+ruby scripts/postgres_backup.rb --production --force
+```
+
+`--force` skips only the 24-hour interval. It does not bypass the lock or the
+production path, clean `main`, and `origin/main` checks. Omit `--force` to retain
+the normal interval. This command does not deploy applications or restart the
+tunnel. Do not print the LaunchAgent environment or put credentials in command
+arguments to run it.
+
+To verify recovery, use credentials authorized to download the snapshot and a
+private temporary directory. Check the complete gzip, then restore the cluster
+dump into an isolated PostgreSQL instance with the matching major version and
+required extensions, including pgvector. Verify Manual's migrations, pages,
+revisions, accounts, and upload references there. Export just the `manual`
+database from that instance for a separately reviewed application restore. Do
+not pipe the cluster dump into the live server: it also contains Postcard and
+other applications. A successful upload and gzip check do not substitute for a
+restore test; the backup writer may have no download permission.
+
+This job backs up database records, including attachment metadata. Uploaded
+image and PDF bytes remain in Manual's separate private S3 bucket; this database
+job does not make a second copy of those objects.
+
 ## Heartbeat script (auto-updates)
 
 To keep your server updated automatically:

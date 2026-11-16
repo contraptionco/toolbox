@@ -12,7 +12,9 @@ class DashboardAppTest < Minitest::Test
     attr_accessor :status, :body
     attr_reader :headers
     def initialize = @headers = {}
-    def []=(key, value) = @headers[key] = value
+    def []=(key, value)
+      @headers[key] = value
+    end
     def [](key) = @headers[key]
   end
 

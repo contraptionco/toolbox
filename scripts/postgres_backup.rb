@@ -1,6 +1,24 @@
+# A manual snapshot must not run deployments or bypass the production checkout
+# checks. Requiring this file from the heartbeat keeps its existing behavior.
+if $PROGRAM_NAME == __FILE__
+  require_relative '../lib/production_guard'
+
+  begin
+    repository = Core::ProductionGuard.require_production!(
+      File.expand_path('..', __dir__), arguments: ARGV, modes: ['--force']
+    )
+    require_relative '../lib/command_runner'
+    Core::ProductionGuard.verify_checkout!(repository, command_runner: Core::CommandRunner)
+  rescue StandardError => e
+    warn "Postgres backup refused: #{e.message}"
+    exit 1
+  end
+end
+
 require 'fileutils'
 require 'shellwords'
 require 'time'
+require 'zlib'
 
 require_relative '../config'
 require_relative '../lib/command_runner'
@@ -22,18 +40,18 @@ module Scripts
     EXPORT_TIMEOUT = 3600
     UPLOAD_TIMEOUT = 3600
 
-    def self.run
-      new.run
+    def self.run(force: false)
+      new.run(force: force)
     end
 
     def initialize
       @timestamp = Time.now.utc.strftime('%Y%m%dT%H%M%SZ')
     end
 
-    def run
+    def run(force: false)
       with_lock do
         last_run = last_success_time
-        if last_run && Time.now.utc - last_run < MIN_INTERVAL
+        if !force && last_run && Time.now.utc - last_run < MIN_INTERVAL
           log(:info, "Skipping backup; last success at #{last_run.utc.iso8601}.")
           next
         end
@@ -41,6 +59,7 @@ module Scripts
         dump_path = nil
         begin
           dump_path = export_databases
+          validate_dump(dump_path)
           upload_to_s3(dump_path)
           mark_success
           log(:info, 'Postgres backup completed successfully.')
@@ -121,6 +140,7 @@ module Scripts
 
       command = <<~CMD
         set -euo pipefail
+        umask 077
         docker exec -i -e PGPASSWORD #{Shellwords.escape(postgres_container_name)} pg_dumpall -U #{Shellwords.escape(postgres_user)} | gzip -c > #{Shellwords.escape(dump_path)}
       CMD
 
@@ -146,9 +166,30 @@ module Scripts
       log(:debug, stdout.strip) unless stdout.strip.empty?
       log(:warn, stderr.strip) unless stderr.strip.empty?
 
+      export_succeeded = true
       dump_path
     rescue Errno::ENOENT => e
       raise "[PostgresBackup] Command failed: #{e.message}"
+    ensure
+      # Assignment in run completes only after a successful export. Remove a
+      # partial dump here when the pipeline fails, including timeouts.
+      cleanup_tempfile(dump_path) if dump_path && !export_succeeded
+    end
+
+    def validate_dump(dump_path)
+      raise '[PostgresBackup] Dump file missing or empty; aborting upload.' unless dump_path && File.file?(dump_path) && File.size(dump_path).positive?
+
+      bytes = 0
+      Zlib::GzipReader.open(dump_path) do |gzip|
+        until gzip.eof?
+          bytes += gzip.read(64 * 1024).bytesize
+        end
+      end
+      raise '[PostgresBackup] Database export is empty; aborting upload.' unless bytes.positive?
+
+      log(:info, 'Gzip integrity and nonempty database export verified.')
+    rescue Zlib::Error, EOFError
+      raise '[PostgresBackup] Gzip integrity check failed; aborting upload.'
     end
 
     def upload_to_s3(dump_path)
@@ -252,5 +293,14 @@ module Scripts
                   time: Time.now.utc.iso8601,
                   message: message)
     end
+  end
+end
+
+if $PROGRAM_NAME == __FILE__
+  begin
+    Scripts::PostgresBackup.run(force: ARGV.include?('--force'))
+  rescue StandardError => e
+    warn "Postgres backup failed: #{e.message}"
+    exit 1
   end
 end
