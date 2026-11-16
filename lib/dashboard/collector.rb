@@ -38,6 +38,7 @@ module Dashboard
       @log_paths = { 'heartbeat' => File.join(@repo_dir, 'heartbeat.log'),
                      'tunnel' => File.join(@repo_dir, 'tunnel.log') }.freeze
       @applications = configured_applications.freeze
+      @one_shot_containers = configured_one_shot_containers.freeze
     end
 
     def snapshot
@@ -126,9 +127,14 @@ module Dashboard
     def configured_applications
       direct = @config::DOCKER_SERVICES.map { |item| { name: item.fetch(:name), type: 'docker', container_name: item.fetch(:name), configured: true } }
       git = @config::GIT_SERVICES.filter_map do |item|
-        next unless item[:container_config]
+        container_name = if item[:container_config]
+                           item[:container_config].fetch(:name, item.fetch(:name))
+                         elsif item[:use_compose]
+                           item.dig(:dashboard, :container_name)
+                         end
+        next unless container_name
 
-        { name: item.fetch(:name), type: 'docker', container_name: item[:container_config].fetch(:name, item.fetch(:name)), configured: true }
+        { name: item.fetch(:name), type: 'docker', container_name: container_name, configured: true }
       end
       host = @config.const_defined?(:SYSTEM_SERVICES) ? @config::SYSTEM_SERVICES.map do |item|
         { name: item.fetch(:name), type: 'host', configured: true }
@@ -141,6 +147,16 @@ module Dashboard
       end
       host << { name: 'cloudflare-tunnel', type: 'host', configured: true } if @config.const_defined?(:TUNNEL_CONFIG) && @config::TUNNEL_CONFIG
       direct + git + host
+    end
+
+    def configured_one_shot_containers
+      @config::GIT_SERVICES.each_with_object({}) do |item, containers|
+        next unless item[:use_compose]
+
+        Array(item.dig(:dashboard, :one_shot_containers)).each do |name|
+          containers[name] = item.fetch(:name)
+        end
+      end
     end
 
     def host_process_status(name)
@@ -291,8 +307,10 @@ module Dashboard
         next unless id.is_a?(String) && id.match?(/\A[0-9a-f]{12,64}\z/) && name.is_a?(String) && name.match?(NAME)
 
         app = @applications.find { |item| item[:container_name] == name }
+        one_shot_app = @one_shot_containers[name]
         { id: id, name: name, image: Redactor.line(row['image']), state: safe_state(row['state']),
-          status: Redactor.line(row['status']), configured: !app.nil?, application: app&.dig(:name),
+          status: Redactor.line(row['status']), configured: !app.nil? || !one_shot_app.nil?,
+          application: app&.dig(:name) || one_shot_app, one_shot: !one_shot_app.nil?,
           transient: name.start_with?('toolbox-op-') }
       end
     end

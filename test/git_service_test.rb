@@ -22,6 +22,15 @@ class GitServiceTest < Minitest::Test
     assert_includes postcard.dig(:container_config, :healthcheck, :test), '/.postcard'
   end
 
+  def test_manual_dashboard_container_names_match_explicit_compose_names
+    manual = Config::GIT_SERVICES.find { |service| service[:name] == 'manual' }
+
+    assert manual[:use_compose]
+    assert_equal manual.dig(:compose_override, :services, :app, :container_name), manual.dig(:dashboard, :container_name)
+    assert_equal [manual.dig(:compose_override, :services, :migrate, :container_name)], manual.dig(:dashboard, :one_shot_containers)
+    refute_nil manual.dig(:dashboard, :container_name)
+  end
+
   def test_stopped_git_service_container_is_removed_before_start
     events = []
     service = {

@@ -217,13 +217,16 @@ module Config
       # Both images are built from the verified release snapshot, without secrets.
       build_cmd: 'docker build --target tools --tag manual-migrate . && docker build --target runner --tag manual-app .',
       use_compose: true,
+      dashboard: { container_name: 'manual-app-1', one_shot_containers: ['manual-migrate-1'] },
       compose_override: {
         services: {
           migrate: {
+            container_name: 'manual-migrate-1',
             pull_policy: 'never',
             logging: { driver: 'local', options: { 'max-size' => '10m', 'max-file' => '3' } }
           },
           app: {
+            container_name: 'manual-app-1',
             pull_policy: 'never',
             logging: { driver: 'local', options: { 'max-size' => '10m', 'max-file' => '3' } }
           }
