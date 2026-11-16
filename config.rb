@@ -207,6 +207,32 @@ module Config
         }
       },
       auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
+      name: 'manual',
+      repo_url: 'git@github.com:philipithomas/manual.git',
+      local_path: "#{CODE_DIR}/manual",
+      branch: 'main',
+      env_config: { type: '1password', item: 'manual', field: 'ENV' },
+      # Both images are built from the verified release snapshot, without secrets.
+      build_cmd: 'docker build --target tools --tag manual-migrate . && docker build --target runner --tag manual-app .',
+      use_compose: true,
+      compose_override: {
+        services: {
+          migrate: {
+            pull_policy: 'never',
+            logging: { driver: 'local', options: { 'max-size' => '10m', 'max-file' => '3' } }
+          },
+          app: {
+            pull_policy: 'never',
+            logging: { driver: 'local', options: { 'max-size' => '10m', 'max-file' => '3' } }
+          }
+        },
+        networks: {
+          default: { external: true, name: NETWORK_NAME }
+        }
+      },
+      auto_update: true
     }
   ]
 

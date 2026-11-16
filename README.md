@@ -221,6 +221,30 @@ GIT_SERVICES = [
 ]
 ```
 
+### Manual
+
+Manual runs at `https://manual.ilic.nyc` from the `philipithomas/manual` repository's
+`main` branch. Toolbox builds the `tools` and `runner` Dockerfile targets as
+`manual-migrate` and `manual-app` inside a temporary snapshot of the verified
+release. Compose uses those local images, runs migrations and the idempotent
+seed, then starts the app on `127.0.0.1:3007`. The app and migration containers
+join the existing `toolbox_network`; no additional PostgreSQL server is created.
+
+The `ENV` field of the `manual` item in the configured 1Password vault contains
+the full multiline production environment. Toolbox writes it to Manual's ignored
+`.env` with owner-only permissions. Compose parses the dotenv values, including
+quoted values; do not split this field into Docker build arguments. Set
+`DATABASE_URL` to the existing database connection string, using `postgres` as
+the hostname when targeting Toolbox's PostgreSQL container. The database itself
+must exist before deployment. The remaining variables are documented in Manual's
+`.env.production.example` and README. Secrets are supplied only at runtime.
+
+The local `config.yml` records the `manual.ilic.nyc` route to port 3007. Cloudflare
+manages this tunnel's active ingress remotely, so the corresponding DNS and
+remote ingress entry must also be configured while preserving all existing
+routes. Verify the public sign-in page and the application flow after deployment,
+as well as the app's `/api/health` endpoint.
+
 ## Heartbeat script (auto-updates)
 
 To keep your server updated automatically:
