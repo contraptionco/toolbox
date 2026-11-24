@@ -107,8 +107,11 @@ LaunchAgent state, which can contain secrets.
   process arguments, LaunchAgent environment variables, or Git.
 - Read only explicitly mapped People rows through macOS Accessibility. Do not
   extract Apple credentials, decrypt caches, change sharing, or bypass macOS
-  permissions. Refresh may open Find My and select People, but never a person or
-  a sharing action. Keep native execution and HTTP requests bounded.
+  permissions. Refresh may open Find My, select People, and open an explicitly
+  mapped person's read-only detail card to verify their exact name. Never invoke
+  sharing actions or context menus. A candidate-name prefix is not identity;
+  legacy rows also require an exact detail header and current row selection.
+  Keep native execution and HTTP requests bounded.
 - Accessibility approval covers the reader and its responsible Ruby parent.
   Read the interpreter path from the installed helper LaunchAgent's first
   `ProgramArguments` entry; do not assume a fixed Ruby version or grant unrelated

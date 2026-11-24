@@ -371,14 +371,18 @@ parent permission. Do not grant unrelated interpreters or change the TCC databas
 `GET /healthz` reports the helper revision, not Find My availability. Authenticated
 `POST /v1/locations` accepts `people: [{personId, findMyName}]` and `refresh`.
 Refresh runs asynchronously and may activate Find My or select its People tab.
-It does not select individual people or invoke sharing actions. A missing
-Accessibility grant returns `permission_required`; a locked session, unavailable
-app, missing person, or unsupported interface remains unavailable.
+On older interfaces, it may open a mapped person's read-only detail card to
+verify the exact name separately from the combined sidebar label. The same row
+must be selected, and a preexisting header cannot validate selecting another row.
+Ambiguous candidates remain unavailable. It never invokes sharing actions or
+context menus. A missing Accessibility grant returns `permission_required`; a
+locked session, unavailable app, missing person, or unsupported interface remains
+unavailable.
 
 Only the latest observations are held in memory. There is no location history,
 background collection timer, request log, or coordinate extraction. A displayed
-`Now` or explicit age supplies the observation time. `Paused` is always marked
-paused with no observation time; directions travel times are never freshness
+`Now` or explicit age in the sidebar supplies the observation time. `Paused` is
+always marked paused with no observation time; directions travel times are never freshness
 evidence. Reads expire after 15 minutes, and observations older than two hours
 are discarded. Manual must distinguish these actual observations from calendar
 locations, which are plans. Responses are private and never cached by a CDN.
