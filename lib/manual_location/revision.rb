@@ -18,7 +18,9 @@ module ManualLocation
       FILES.each do |relative|
         digest << relative << "\0" << Digest::SHA256.file(File.join(repo, relative)).hexdigest << "\0"
       end
-      digest << File.expand_path(repo) << "\0" << home << "\0" << ruby << "\0" << Digest::SHA256.file(config_path).hexdigest
+      digest << File.expand_path(repo) << "\0" << home << "\0" << ruby << "\0"
+      digest << RUBY_DESCRIPTION << "\0" << Digest::SHA256.file(ruby).hexdigest << "\0"
+      digest << Digest::SHA256.file(config_path).hexdigest
       "v2:#{digest.hexdigest}"
     end
   end

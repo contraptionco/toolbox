@@ -35,6 +35,9 @@ class ManualLocationServiceTest < Minitest::Test
     @repo = File.join(@directory, 'production')
     @home = File.join(@directory, 'home')
     @runtime = File.join(@repo, '.runtime', 'manual-location')
+    @ruby = File.join(@directory, 'ruby', 'bin', 'ruby')
+    FileUtils.mkdir_p(File.dirname(@ruby))
+    File.write(@ruby, 'fixture interpreter', perm: 0o700)
     FileUtils.mkdir_p([@runtime, @home, File.join(@repo, 'native')])
     ManualLocation::Revision::FILES.each do |relative|
       path = File.join(@repo, relative)
@@ -49,7 +52,7 @@ class ManualLocationServiceTest < Minitest::Test
     @key = 'test-key-' + 'y' * 43
     @config = File.join(@runtime, 'config.json')
     File.write(@config, JSON.generate(key: @key), perm: 0o600)
-    @expected = ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home)
+    @expected = ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: @ruby, home: @home)
     @runner = Runner.new
     @health = [nil, @expected]
   end
@@ -62,7 +65,7 @@ class ManualLocationServiceTest < Minitest::Test
   def service(**options)
     Core::ManualLocationService.new(repo_dir: @repo, home_dir: @home, runner: @runner,
                                    health_reader: -> { @health.shift }, sleeper: ->(_) {}, uid: 501,
-                                   ruby: '/fixture/ruby/bin/ruby', **options)
+                                   ruby: @ruby, **options)
   end
 
   def plist_path
@@ -112,7 +115,7 @@ class ManualLocationServiceTest < Minitest::Test
     @health = [@expected]
     assert service.ensure_running
     assert @runner.calls.all? { |arguments, _| arguments.first == 'git' }
-    assert_equal @expected, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home)
+    assert_equal @expected, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: @ruby, home: @home)
   end
 
   def test_helper_code_dependencies_and_private_key_changes_invalidate_the_revision
@@ -121,24 +124,37 @@ class ManualLocationServiceTest < Minitest::Test
       path = File.join(@repo, relative)
       previous = File.read(path)
       File.write(path, previous + '\nchange')
-      refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home), relative
+      refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: @ruby, home: @home), relative
       File.write(path, previous)
     end
-    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/other/ruby', home: @home)
-    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home + '-other')
+    alternative_ruby = @ruby + '-other'
+    FileUtils.cp(@ruby, alternative_ruby)
+    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: alternative_ruby, home: @home)
+    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: @ruby, home: @home + '-other')
     File.write(@config, JSON.generate(key: 'replacement-' + 'z' * 43), perm: 0o600)
-    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home)
+    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: @ruby, home: @home)
   end
 
   def test_changed_helper_restarts_but_does_not_recompile_unchanged_native_source
     assert service.ensure_running
     @runner.calls.clear
     File.write(File.join(@repo, 'lib/manual_location/app.rb'), 'changed helper implementation')
-    expected = ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home)
+    expected = ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: @ruby, home: @home)
     @health = [@expected, expected]
     assert service.ensure_running
     assert_includes @runner.calls.map(&:first), ['launchctl', 'kickstart', '-k', 'gui/501/co.contraption.toolbox.manual-location']
     refute @runner.calls.any? { |arguments, _| arguments.first == '/usr/bin/xcrun' }
+  end
+
+  def test_replacing_the_interpreter_at_the_same_path_restarts_the_helper
+    assert service.ensure_running
+    @runner.calls.clear
+    File.write(@ruby, 'replacement interpreter', perm: 0o700)
+    expected = ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: @ruby, home: @home)
+    refute_equal @expected, expected
+    @health = [@expected, expected]
+    assert service.ensure_running
+    assert_includes @runner.calls.map(&:first), ['launchctl', 'kickstart', '-k', 'gui/501/co.contraption.toolbox.manual-location']
   end
 
   def test_removing_private_config_unloads_only_this_bridge
