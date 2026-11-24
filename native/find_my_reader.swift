@@ -6,7 +6,7 @@ import Foundation
 // sidebar rows and never reads Apple account files, caches, or the keychain.
 // The parent process enforces a second, hard wall-clock timeout.
 struct Input: Decodable { let names: [String] }
-struct Row: Encodable { let name: String; let description: String }
+struct Row: Encodable { let name: String; let description: String; let selected: Bool }
 struct Output: Encodable { var rows: [Row] = []; var error: String? = nil }
 
 func emit(_ value: Output, code: Int32 = 0) -> Never {
@@ -88,6 +88,7 @@ let selected = (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue ?? fa
 if !selected { _ = AXUIElementPerformAction(tab, kAXPressAction as CFString) }
 runLoop(0.5)
 
+let distanceField = try! NSRegularExpression(pattern: #",\s*(?:[<>≈]\s*)?\d+(?:[.,]\d+)?\s*(?:km|m|mi|ft)(?=,)"#, options: [.caseInsensitive])
 func readRows() -> [Row] {
     var found: [Row] = []
     var seen = Set<String>()
@@ -95,11 +96,23 @@ func readRows() -> [Row] {
         guard string(element, kAXIdentifierAttribute).hasPrefix("ListEntityRow") else { return }
         let description = string(element, kAXDescriptionAttribute).precomposedStringWithCanonicalMapping
         guard description.count <= 2048 else { return }
+        // The name ends at the structured distance field, not at the first
+        // comma. Multiple possible distance fields make identity ambiguous.
+        let boundaries = distanceField.matches(in: description, range: NSRange(description.startIndex..., in: description))
+        guard boundaries.count == 1, let boundary = Range(boundaries[0].range, in: description) else { return }
+        var completeName = String(description[..<boundary.lowerBound])
+        let selected = (attribute(element, kAXSelectedAttribute) as? NSNumber)?.boolValue
+        if completeName.hasSuffix(", Open Details") {
+            // This text can also be part of someone's actual name. Strip it
+            // only when the row explicitly says it is selected.
+            guard let selected else { return }
+            if selected { completeName.removeLast(", Open Details".count) }
+        }
         for name in input.names {
             let normalized = name.precomposedStringWithCanonicalMapping
-            guard description.hasPrefix(normalized + ",") else { continue }
+            guard completeName == normalized else { continue }
             let key = normalized + "\u{0}" + description
-            if seen.insert(key).inserted { found.append(Row(name: name, description: description)) }
+            if seen.insert(key).inserted { found.append(Row(name: name, description: description, selected: selected ?? false)) }
         }
     }
     return found

@@ -28,20 +28,29 @@ module ManualLocation
       raise SourceError, 'source_unavailable' unless rows.is_a?(Array) && rows.length <= 128
       now = @clock.call
       names.to_h do |name|
-        matches = rows.select { |row| row.is_a?(Hash) && row['name'] == name && row['description'].is_a?(String) }.map { |row| row['description'] }.uniq
+        matches = rows.select { |row| row.is_a?(Hash) && row['name'] == name && row['description'].is_a?(String) }
+                      .map { |row| [row['description'], row['selected'] == true] }.uniq
         # Duplicate display names cannot be mapped safely to a family account.
-        [name, matches.length == 1 ? self.class.parse_row(name, matches.first, now) : nil]
+        [name, matches.length == 1 ? self.class.parse_row(name, matches.first[0], now, selected: matches.first[1]) : nil]
       end.compact
     rescue JSON::ParserError, TypeError
       raise SourceError, 'source_unavailable'
     end
 
-    def self.parse_row(name, description, now)
-      return nil unless description.bytesize <= 4096 && description.start_with?("#{name},")
-      text = description.delete_prefix("#{name},").strip
-      text = text.sub(/\AOpen Details,\s*/, '')
+    def self.parse_row(name, description, now, selected: false)
+      return nil unless description.bytesize <= 4096
+      description = description.unicode_normalize(:nfc)
+      name = name.unicode_normalize(:nfc)
+      # Locate the complete name using the one structured distance field. A
+      # prefix alone could confuse Alex with Alex, Jr. Ambiguous rows fail closed.
+      boundaries = description.to_enum(:scan, /,\s*(?:[<>≈]\s*)?\d+(?:[.,]\d+)?\s*(?:km|m|mi|ft)(?=,)/i).map { Regexp.last_match }
+      return nil unless boundaries.length == 1
+      boundary = boundaries.first
+      complete_name = description[0...boundary.begin(0)]
+      complete_name = complete_name.delete_suffix(', Open Details') if selected
+      return nil unless complete_name == name
       # Distances are relative to the Mac, not the person's location or time.
-      text = text.sub(/\A(?:[<>≈]\s*)?\d+(?:[.,]\d+)?\s*(?:km|m|mi|ft),\s*/i, '')
+      text = description[boundary.end(0)..].delete_prefix(',').lstrip
       if text.match?(/(?:,|·)\s*Paused\z/i)
         label = clean_label(text.sub(/(?:,|·)\s*Paused\z/i, ''))
         return { status: 'paused', label: label, observed_at: nil, checked_at: now }

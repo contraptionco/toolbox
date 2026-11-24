@@ -64,7 +64,7 @@ class ManualLocationTest < Minitest::Test
 
   def test_parser_accepts_only_explicit_freshness_and_never_treats_directions_eta_as_observation_time
     parse = ->(text) { ManualLocation::FindMySource.parse_row('Person One', text, NOW) }
-    selected = parse.call('Person One, Open Details, 3 km, Manhattan Bridge, New York, Paused')
+    selected = ManualLocation::FindMySource.parse_row('Person One', 'Person One, Open Details, 3 km, Manhattan Bridge, New York, Paused', NOW, selected: true)
     assert_equal 'paused', selected[:status]
     assert_equal 'Manhattan Bridge, New York', selected[:label]
     assert_nil selected[:observed_at]
@@ -81,19 +81,35 @@ class ManualLocationTest < Minitest::Test
     assert_nil parse.call('Person One, 1 km, Home, 3 hours ago')
   end
 
+  def test_parser_matches_complete_unicode_names_and_rejects_ambiguous_identity
+    source = ManualLocation::FindMySource
+    assert_equal 'Home', source.parse_row("Jose\u0301", 'José, 1 km, Home, Now', NOW)[:label]
+    assert_equal 'Home', source.parse_row('José', "Jose\u0301, 1 km, Home, Now", NOW)[:label]
+    assert_nil source.parse_row('Alex', 'Alex, Jr., 1 km, Home, Now', NOW)
+    assert_equal 'Home', source.parse_row('Alex, Jr.', 'Alex, Jr., 1 km, Home, Now', NOW)[:label]
+    assert_nil source.parse_row('Alex', 'Alex, 2 km, 1 km, Home, Now', NOW)
+    assert_nil source.parse_row('Alex, 2 km', 'Alex, 2 km, 1 km, Home, Now', NOW)
+    assert_nil source.parse_row('Alex', 'Alex, Open Details, 1 km, Home, Now', NOW)
+    assert_equal 'Home', source.parse_row('Alex, Open Details', 'Alex, Open Details, 1 km, Home, Now', NOW)[:label]
+    assert_equal 'Home', source.parse_row('Alex', 'Alex, Open Details, 1 km, Home, Now', NOW, selected: true)[:label]
+    assert_equal 'Home', source.parse_row('Alex, Open Details', 'Alex, Open Details, Open Details, 1 km, Home, Now', NOW, selected: true)[:label]
+  end
+
   def test_source_ignores_unrequested_rows_rejects_ambiguous_names_and_returns_safe_errors
     source = ManualLocation::FindMySource.new(executable: '/unused', clock: -> { NOW }, runner: ->(_names) {
       JSON.generate(rows: [
         { name: 'Person One', description: 'Person One, 1 km, Home, Now' },
         { name: 'Person One', description: 'Person One, 3 km, Work, Now' },
         { name: 'Person Two', description: 'Person Two, 1 km, Work · Paused' },
+        { name: 'Person Three', description: 'Person Three, Open Details, 1 km, Home, Now', selected: true },
         { name: 'Unrelated', description: 'Unrelated, 0 m, Confidential, Now' }
       ])
     })
-    result = source.refresh(['Person One', 'Person Two'])
+    result = source.refresh(['Person One', 'Person Two', 'Person Three'])
     refute result.key?('Person One')
     refute result.key?('Unrelated')
     assert_equal 'paused', result['Person Two'][:status]
+    assert_equal 'Home', result['Person Three'][:label]
     denied = ManualLocation::FindMySource.new(executable: '/unused', runner: ->(_names) { JSON.generate(error: 'permission_required') })
     assert_equal 'permission_required', assert_raises(ManualLocation::SourceError) { denied.refresh(['Person One']) }.code
   end
