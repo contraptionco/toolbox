@@ -2,6 +2,16 @@ require_relative 'test_helper'
 require_relative '../lib/service_manager'
 
 class ServiceManagerTest < Minitest::Test
+  def test_location_failure_is_reported_without_blocking_application_checks
+    failures = nil
+    capture_output do
+      Core::ManualLocationService.stub(:ensure_running, -> { raise 'location unavailable' }) do
+        failures = Core::ServiceManager.start_manual_location
+      end
+    end
+    assert_equal ['manual-location'], failures.map { |failure| failure[:component] }
+  end
+
   def test_dashboard_failure_is_reported_without_raising_before_other_services
     failures = nil
     capture_output do

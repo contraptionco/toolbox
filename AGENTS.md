@@ -96,6 +96,27 @@ LaunchAgent state, which can contain secrets.
   after testing. Match Bully Pulpit's typography, warm colors and square controls.
   Reuse the README's `assets/toolbox.svg` logo rather than inventing a wordmark.
 
+## Manual location bridge
+
+- Keep Manual in Docker. The optional native Find My reader runs through its own
+  `co.contraption.toolbox.manual-location` LaunchAgent on **127.0.0.1:4180**.
+  Do not expose it through Cloudflare or expand the read-only dashboard API.
+- A private mode-0600 `.runtime/manual-location/config.json` contains only its
+  narrow shared key. Profile mappings arrive from Manual in authenticated
+  server-to-server requests. Never put names, locations, or credentials in logs,
+  process arguments, LaunchAgent environment variables, or Git.
+- Read only explicitly mapped People rows through macOS Accessibility. Do not
+  extract Apple credentials, decrypt caches, change sharing, or bypass macOS
+  permissions. Refresh may open Find My and select People, but never a person or
+  a sharing action. Keep native execution and HTTP requests bounded.
+- Preserve freshness: a directions ETA is not a location observation time.
+  Paused has no trustworthy time and must never appear current. Ambiguous or
+  unsupported rows remain unavailable. Keep latest observations only in memory,
+  without location history or scheduled collection.
+- Keep helper failures isolated from application checks. A successful health
+  response proves process readiness, not Accessibility permission or a live
+  location. Tests use synthetic rows, fixture checkouts, and mocked launchctl.
+
 ## Use a separate checkout
 
 - Treat `/Users/philip/code/toolbox` and application repositories referenced by

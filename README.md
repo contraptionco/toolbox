@@ -268,6 +268,63 @@ remote ingress entry must also be configured while preserving all existing
 routes. Verify the public sign-in page and the application flow after deployment,
 as well as the app's `/api/health` endpoint.
 
+#### Find My locations
+
+Manual can read explicitly mapped family locations from Find My on the Mac. The
+application stays in Docker. An optional native LaunchAgent,
+`co.contraption.toolbox.manual-location`, serves only **127.0.0.1:4180**. Docker
+Desktop reaches it through `host.docker.internal`; it has no public tunnel route.
+
+The Mac must have a logged-in graphical session, Find My signed in, and the
+relevant people already sharing their locations. In each Manual profile, set the
+exact Find My display name. The bridge reads only those requested names. It does
+not change Apple sharing permissions, read Apple account caches, or use the
+keychain. Duplicate names with conflicting rows are unavailable rather than
+guessed. This uses Find My's English Accessibility interface, not a supported
+Apple People API, so macOS interface changes can require a reader update.
+
+For an authorized production setup, create
+`~/code/toolbox/.runtime/manual-location/config.json` as a regular, owner-owned
+file with mode `0600`, in an owner-only directory. It contains only:
+
+```json
+{"key":"<random URL-safe key of at least 43 characters>"}
+```
+
+Set these variables in the `manual` 1Password item's `ENV` field:
+
+```dotenv
+MANUAL_LOCATION_BRIDGE_URL=http://host.docker.internal:4180
+MANUAL_LOCATION_BRIDGE_KEY=<the same key>
+```
+
+The key is a separate, narrow credential. Do not reuse an Apple, 1Password, or
+application signing credential. Keep it out of shell arguments, logs, and Git.
+The heartbeat compiles `native/find_my_reader.swift`, installs the locked Ruby
+dependencies, and starts only this LaunchAgent when the private configuration
+exists. Grant Accessibility access in macOS Settings to
+`~/code/toolbox/.runtime/manual-location/find-my-reader`. A changed native binary
+may need approval again; unrelated Toolbox releases preserve that binary.
+
+`GET /healthz` reports the helper revision, not Find My availability. Authenticated
+`POST /v1/locations` accepts `people: [{personId, findMyName}]` and `refresh`.
+Refresh runs asynchronously and may activate Find My or select its People tab.
+It does not select individual people or invoke sharing actions. A missing
+Accessibility grant returns `permission_required`; a locked session, unavailable
+app, missing person, or unsupported interface remains unavailable.
+
+Only the latest observations are held in memory. There is no location history,
+background collection timer, request log, or coordinate extraction. A displayed
+`Now` or explicit age supplies the observation time. `Paused` is always marked
+paused with no observation time; directions travel times are never freshness
+evidence. Reads expire after 15 minutes, and observations older than two hours
+are discarded. Manual must distinguish these actual observations from calendar
+locations, which are plans. Responses are private and never cached by a CDN.
+
+Removing the private configuration disables the helper on the next heartbeat,
+unloads its own LaunchAgent, and leaves other services untouched. Optional-helper
+failures do not skip application deployment checks.
+
 ### PostgreSQL backups, including Manual
 
 Manual's production `DATABASE_URL` points to the `manual` database in Toolbox's

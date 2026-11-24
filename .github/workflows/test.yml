@@ -18,3 +18,5 @@ jobs:
         run: bundle exec ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
       - name: Check heartbeat syntax
         run: zsh -n heartbeat.sh
+      - name: Check native Find My helper
+        run: xcrun swiftc -typecheck native/find_my_reader.swift
