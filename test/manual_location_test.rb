@@ -41,7 +41,7 @@ class ManualLocationTest < Minitest::Test
       batches << names
       {}
     end
-    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { NOW }, thread: ->(&block) { jobs << block })
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { NOW }, monotonic: -> { NOW.to_f }, thread: ->(&block) { jobs << block })
     100.times { |i| app.start_refresh([{ 'personId' => PERSON, 'findMyName' => "Person #{i}" }]) }
     assert_equal 1, jobs.length
     jobs.shift.call
@@ -123,7 +123,7 @@ class ManualLocationTest < Minitest::Test
       calls << names
       names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: NOW, checked_at: NOW }] }
     end
-    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, thread: ->(&block) { jobs << block })
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { jobs << block })
     with_server(app) do |uri|
       response = Net::HTTP.get_response(URI("#{uri}/healthz"))
       assert_equal 200, response.code.to_i
@@ -161,13 +161,13 @@ class ManualLocationTest < Minitest::Test
       raise ManualLocation::SourceError, 'permission_required' if mode == :denied
       { 'Person One' => { status: 'paused', label: 'Home', observed_at: nil, checked_at: now } }
     end
-    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, thread: ->(&block) { block.call })
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { block.call })
     app.start_refresh([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])
     result = app.snapshot([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])[:people][0]
     assert_equal 'paused', result[:status]
     assert_nil result[:observedAt]
     refute result.key?(:latitude)
-    now += 21
+    now += 121
     mode = :denied
     app.start_refresh([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])
     assert_equal 'permission_required', app.snapshot([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])[:reason]
@@ -201,7 +201,7 @@ class ManualLocationTest < Minitest::Test
       raise ManualLocation::SourceError, 'permission_required' if source == 'device' && fail_device
       names.to_h { |name| [name, { status: 'located', label: source == 'person' ? 'Work' : 'Home', observed_at: now, checked_at: now }] }
     end
-    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, thread: ->(&block) { jobs << block })
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { jobs << block })
     person = { 'personId' => PERSON, 'findMyName' => 'Same name' }
     device = { 'personId' => OTHER, 'findMyName' => 'Same name', 'findMySource' => 'device' }
     app.start_refresh([person])
@@ -214,7 +214,7 @@ class ManualLocationTest < Minitest::Test
     assert_equal %w[person device], result.map { |row| row[:findMySource] }
     app.start_refresh([person, device])
     assert_empty jobs
-    now += 21
+    now += 121
     fail_device = true
     app.start_refresh([device])
     jobs.shift.call
@@ -287,7 +287,7 @@ class ManualLocationTest < Minitest::Test
       raise ManualLocation::SourceError, 'permission_required' if mode == 'denied'
       names.to_h { |name| [name, { status: mode, label: 'Sample City', address: '12 Example Street, Sample City, NY 10000', observed_at: NOW, checked_at: now }] }
     end
-    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, thread: ->(&block) { block.call })
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { block.call })
     people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
     app.start_refresh(people)
     assert app.snapshot(people)[:people][0].key?(:address)
@@ -296,11 +296,11 @@ class ManualLocationTest < Minitest::Test
     app.start_refresh(people)
     assert_equal 'stale', app.snapshot(people)[:people][0][:status]
     assert app.snapshot(people)[:people][0].key?(:address)
-    now += 21
+    now += 121
     mode = 'paused'
     app.start_refresh(people)
     refute app.snapshot(people)[:people][0].key?(:address)
-    now += 21
+    now += 121
     mode = 'denied'
     app.start_refresh(people)
     refute app.snapshot(people)[:people][0].key?(:address)
@@ -311,7 +311,7 @@ class ManualLocationTest < Minitest::Test
     source.define_singleton_method(:refresh) do |names, source:|
       names.to_h { |name| [name, { status: 'located', label: '🏠' * 160, address: "12 #{'Long ' * 30}Street, Sample City, NY 10000", observed_at: NOW, checked_at: NOW }] }
     end
-    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { NOW }, thread: ->(&block) { block.call })
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { NOW }, monotonic: -> { NOW.to_f }, thread: ->(&block) { block.call })
     people = 32.times.map { |i| { personId: format('00000000-0000-4000-8000-%012d', i), findMyName: "Person #{i}" } }
     with_server(app) do |uri|
       response = request(uri, body: { people: people, refresh: true })
@@ -321,6 +321,177 @@ class ManualLocationTest < Minitest::Test
       assert_equal 32, parsed['people'].length
       assert parsed['people'].all? { |person| person['address'] && person['label'].valid_encoding? }
     end
+  end
+
+  def test_slow_refresh_is_deduplicated_and_cooldown_starts_after_completion
+    now = NOW
+    elapsed = 0.0
+    jobs = []
+    calls = 0
+    active_snapshots = []
+    person = { 'personId' => PERSON, 'findMyName' => 'Person One' }
+    other = { 'personId' => OTHER, 'findMyName' => 'Person Two' }
+    app = nil
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      calls += 1
+      elapsed += 180
+      now += 180
+      5.times { app.start_refresh([person]) }
+      active_snapshots << [app.snapshot([person])[:refreshing], app.snapshot([other])[:refreshing]]
+      names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: now, checked_at: now }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture',
+      clock: -> { now }, monotonic: -> { elapsed }, thread: ->(&block) { jobs << block })
+    app.start_refresh([person])
+    jobs.shift.call
+    assert_equal 1, calls
+    assert_equal [[true, false]], active_snapshots
+    refute app.snapshot([person])[:refreshing]
+    elapsed += 119
+    app.start_refresh([person])
+    assert_empty jobs
+    elapsed += 1
+    app.start_refresh([person])
+    assert_equal 1, jobs.length
+  end
+
+  def test_transient_missing_rows_keep_original_observation_until_cache_expiry_and_recover
+    now = NOW
+    jobs = []
+    mode = :ready
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      next {} if mode == :missing
+      names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: now - 60, checked_at: now }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture',
+      clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { jobs << block })
+    people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
+    app.start_refresh(people)
+    jobs.shift.call
+    original = app.snapshot(people)[:people][0][:observedAt]
+    now += 121
+    mode = :missing
+    app.start_refresh(people)
+    pending = app.snapshot(people)
+    assert pending[:refreshing]
+    assert_equal 'ready', pending[:people][0][:status]
+    assert_equal original, pending[:people][0][:observedAt]
+    jobs.shift.call
+    retained = app.snapshot(people)
+    assert_equal 'stale', retained[:people][0][:status]
+    assert_equal original, retained[:people][0][:observedAt]
+    assert_equal 'source_unavailable', retained[:reason]
+    now = NOW + 901
+    app.start_refresh(people)
+    jobs.shift.call
+    assert_equal 'unavailable', app.snapshot(people)[:people][0][:status]
+    now += 121
+    mode = :ready
+    app.start_refresh(people)
+    jobs.shift.call
+    recovered = app.snapshot(people)
+    assert_equal 'ready', recovered[:people][0][:status]
+    assert_equal (now - 60).utc.iso8601, recovered[:people][0][:observedAt]
+    refute recovered.key?(:reason)
+  end
+
+  def test_temporary_source_error_preserves_stale_data_but_permission_denial_purges_it
+    now = NOW
+    mode = :ready
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      raise ManualLocation::SourceError, mode.to_s unless mode == :ready
+      names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: NOW, checked_at: NOW }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture',
+      clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { block.call })
+    people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
+    app.start_refresh(people)
+    now += 121
+    mode = :source_unavailable
+    app.start_refresh(people)
+    assert_equal 'stale', app.snapshot(people)[:people][0][:status]
+    assert_equal NOW.utc.iso8601, app.snapshot(people)[:people][0][:observedAt]
+    now += 121
+    mode = :permission_required
+    app.start_refresh(people)
+    result = app.snapshot(people)
+    assert_equal 'permission_required', result[:reason]
+    assert_equal 'unavailable', result[:people][0][:status]
+    refute_includes JSON.generate(result), 'Home'
+  end
+
+  def test_cooldown_uses_monotonic_time_and_does_not_rejuvenate_cached_source_time
+    now = NOW
+    elapsed = 0.0
+    jobs = []
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: NOW, checked_at: NOW }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture',
+      clock: -> { now }, monotonic: -> { elapsed }, thread: ->(&block) { jobs << block })
+    people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
+    app.start_refresh(people)
+    jobs.shift.call
+    now -= 3600
+    elapsed += 119
+    app.start_refresh(people)
+    assert_empty jobs
+    assert_equal 'unavailable', app.snapshot(people)[:people][0][:status]
+    elapsed += 1
+    app.start_refresh(people)
+    assert_equal 1, jobs.length
+    jobs.shift.call
+    now = NOW + 901
+    assert_equal 'unavailable', app.snapshot(people)[:people][0][:status]
+  end
+
+  def test_completed_source_is_visible_while_the_other_source_is_still_running
+    person = { 'personId' => PERSON, 'findMyName' => 'Person One' }
+    device = { 'personId' => OTHER, 'findMyName' => 'Family phone', 'findMySource' => 'device' }
+    partial = nil
+    app = nil
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      partial = [app.snapshot([person]), app.snapshot([device])] if source == 'device'
+      names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: NOW, checked_at: NOW }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture',
+      clock: -> { NOW }, thread: ->(&block) { block.call })
+    app.start_refresh([person, device])
+    refute partial[0][:refreshing]
+    assert_equal 'ready', partial[0][:people][0][:status]
+    assert partial[1][:refreshing]
+    assert_equal 'unavailable', partial[1][:people][0][:status]
+    assert_equal %w[ready ready], app.snapshot([person, device])[:people].map { |entry| entry[:status] }
+  end
+
+  def test_error_metadata_eviction_cannot_make_a_retained_observation_current
+    now = NOW
+    mode = :ready
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      next {} if mode == :missing
+      names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: now, checked_at: now }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture',
+      clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { block.call })
+    people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
+    app.start_refresh(people)
+    now += 121
+    mode = :missing
+    app.start_refresh(people)
+    32.times { |index| app.start_refresh([{ 'personId' => OTHER, 'findMyName' => "Missing #{index}" }]) }
+    retained = app.snapshot(people)[:people][0]
+    assert_equal 'stale', retained[:status]
+    assert_equal NOW.utc.iso8601, retained[:observedAt]
+    now += 121
+    mode = :ready
+    app.start_refresh(people)
+    assert_equal 'ready', app.snapshot(people)[:people][0][:status]
   end
 
   private

@@ -161,7 +161,7 @@ guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedV
     emit(Output(error: "permission_required"), code: 77)
 }
 
-var deadline = Date().addingTimeInterval(15)
+var deadline = Date().addingTimeInterval(30)
 func runLoop(_ seconds: TimeInterval) {
     RunLoop.current.run(until: min(Date().addingTimeInterval(seconds), deadline))
 }
@@ -244,7 +244,11 @@ guard let initialTab = sourceTab else { emit(Output(error: "source_unavailable")
 var tab = initialTab
 let selected = (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue ?? false
 if !selected { _ = AXUIElementPerformAction(tab, kAXPressAction as CFString) }
-runLoop(0.5)
+// Selecting a tab is asynchronous on the host Mac. Wait for its state rather
+// than re-pressing it or reading a still-visible row from the previous source.
+let tabSettle = min(Date().addingTimeInterval(3), deadline)
+while (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue != true && Date() < tabSettle { runLoop(0.15) }
+runLoop(0.25)
 guard (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { emit(Output(error: "source_unavailable"), code: 69) }
 
 let distanceField = try! NSRegularExpression(pattern: #",\s*(?:[<>≈]\s*)?\d+(?:[.,]\d+)?\s*(?:km|m|mi|ft)(?=,)"#, options: [.caseInsensitive])
@@ -498,7 +502,15 @@ func legacyCandidates(_ name: String) -> [AXUIElement] {
 
 func readLegacyRow(_ name: String) -> Row? {
     guard (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { return nil }
-    let candidates = legacyCandidates(name)
+    var candidates = legacyCandidates(name)
+    // A newly selected source can briefly expose an empty sidebar. Only wait
+    // for discovery; do not repeat actions or accept ambiguous candidates.
+    let candidateSettle = min(Date().addingTimeInterval(4), deadline.addingTimeInterval(-5))
+    while candidates.isEmpty && Date() < candidateSettle {
+        runLoop(0.2)
+        guard refreshWindow(), (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { return nil }
+        candidates = legacyCandidates(name)
+    }
     guard candidates.count == 1, let candidate = candidates.first else { return nil }
     let wasSelected = legacyRowIsSelected(candidate)
     let previousHeaders = exactDetailHeaders(name)
@@ -514,7 +526,7 @@ func readLegacyRow(_ name: String) -> Row? {
         // is not identity evidence; observe selection and the new header below.
         _ = AXUIElementPerformAction(candidate, kAXPressAction as CFString)
     }
-    let settle = min(Date().addingTimeInterval(2), deadline)
+    let settle = min(Date().addingTimeInterval(4), deadline)
     var selectedCandidate: AXUIElement?
     while Date() < settle {
         // Selecting a row can replace its Accessibility element. Discover the

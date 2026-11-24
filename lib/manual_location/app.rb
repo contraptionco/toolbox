@@ -15,18 +15,21 @@ module ManualLocation
     MAX_BODY_BYTES = 32_768
     MAX_PEOPLE = 32
     MAX_NAMES = 32
-    REFRESH_INTERVAL = 20
+    REFRESH_INTERVAL = 120
     FRESH_SECONDS = 15 * 60
     EXPIRE_SECONDS = 2 * 60 * 60
 
-    def initialize(config:, source:, revision:, clock: -> { Time.now }, thread: ->(&block) { Thread.new(&block) })
-      @config, @source, @revision, @clock, @thread = config, source, revision, clock, thread
+    def initialize(config:, source:, revision:, clock: -> { Time.now },
+                   monotonic: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) },
+                   thread: ->(&block) { Thread.new(&block) })
+      @config, @source, @revision, @clock, @monotonic, @thread = config, source, revision, clock, monotonic, thread
       @key_hash = Digest::SHA256.digest(config.key)
       @mutex = Mutex.new
       @observations = {}
       @refreshing = false
-      @last_started = {}
+      @last_completed = {}
       @pending = Set.new
+      @inflight = Set.new
       @checked_at = nil
       @errors = {}
     end
@@ -64,8 +67,10 @@ module ManualLocation
     def snapshot(people)
       @mutex.synchronize do
         now = @clock.call
-        error = people.filter_map { |person| @errors[mapping_key(person)] }.first
-        { refreshing: @refreshing, checkedAt: @checked_at&.utc&.iso8601, reason: error,
+        targets = people.map { |person| mapping_key(person) }
+        error = targets.filter_map { |target| @errors[target] }.first
+        refreshing = targets.any? { |target| @pending.include?(target) || @inflight.include?(target) }
+        { refreshing: refreshing, checkedAt: @checked_at&.utc&.iso8601, reason: error,
           people: people.map { |person| visible_observation(person, now) } }.compact
       end
     end
@@ -73,7 +78,8 @@ module ManualLocation
     def start_refresh(people)
       should_start = @mutex.synchronize do
         people.map { |person| mapping_key(person) }.uniq.each do |target|
-          next if @last_started[target] && @clock.call - @last_started[target] < REFRESH_INTERVAL
+          next if @inflight.include?(target)
+          next if @last_completed[target] && @monotonic.call - @last_completed[target] < REFRESH_INTERVAL
           @pending.add(target) if @pending.length < MAX_NAMES
         end
         next false if @refreshing || @pending.empty?
@@ -91,8 +97,7 @@ module ManualLocation
             else
               selected = @pending.to_a.first(MAX_NAMES)
               selected.each { |name| @pending.delete(name) }
-              selected.each { |name| @last_started[name] = @clock.call }
-              @last_started.shift while @last_started.length > MAX_NAMES * 2
+              @inflight.merge(selected)
               selected
             end
           end
@@ -104,22 +109,43 @@ module ManualLocation
               observations = @source.refresh(group.map(&:last), source: kind)
               @mutex.synchronize do
                 group.each do |target|
-                  @observations.delete(target)
-                  @observations[target] = observations[target.last]
-                  @errors.delete(target)
+                  if observations[target.last].is_a?(Hash)
+                    @observations.delete(target)
+                    @observations[target] = observations[target.last]
+                    @errors.delete(target)
+                  else
+                    # A temporarily missing row must not discard the last
+                    # verified observation or pretend it was checked again.
+                    @errors[target] = 'source_unavailable'
+                    mark_refresh_failed(target)
+                  end
                 end
                 @observations.shift while @observations.length > MAX_NAMES
-                @last_started.delete_if { |_target, time| @clock.call - time > 600 }
+                @errors.shift while @errors.length > MAX_NAMES
                 @checked_at = @clock.call
               end
             rescue StandardError => error
               @mutex.synchronize do
                 group.each do |target|
-                  @observations.delete(target) if error.is_a?(SourceError) && error.code == 'permission_required'
+                  if error.is_a?(SourceError) && error.code == 'permission_required'
+                    @observations.delete(target)
+                  else
+                    mark_refresh_failed(target)
+                  end
                   @errors[target] = error.is_a?(SourceError) ? error.code : 'source_unavailable'
                 end
                 @errors.shift while @errors.length > MAX_NAMES
                 @checked_at = @clock.call
+              end
+            ensure
+              @mutex.synchronize do
+                completed = @monotonic.call
+                group.each do |target|
+                  @inflight.delete(target)
+                  @last_completed.delete(target)
+                  @last_completed[target] = completed
+                end
+                @last_completed.shift while @last_completed.length > MAX_NAMES * 2
               end
             end
           end
@@ -182,13 +208,20 @@ module ManualLocation
       age = now - observed
       return base.merge(status: 'unavailable') unless age >= -60 && age <= EXPIRE_SECONDS
       return base.merge(status: 'unavailable') if label.empty?
-      result = base.merge(status: age <= FRESH_SECONDS && !@errors[source_id] ? 'ready' : 'stale', observedAt: observed.utc.iso8601, label: label)
+      result = base.merge(status: age <= FRESH_SECONDS && !entry[:refresh_failed] && !@errors[source_id] ? 'ready' : 'stale', observedAt: observed.utc.iso8601, label: label)
       address = FindMySource.clean_address(entry[:address])
       address ? result.merge(address: address) : result
     end
 
     def mapping_key(person)
       [person.fetch('findMySource', 'person'), person.fetch('findMyName').unicode_normalize(:nfc)].freeze
+    end
+
+    def mark_refresh_failed(target)
+      entry = @observations[target]
+      # Keep failed freshness with the observation itself. Evicting unrelated
+      # error metadata must never make this observation appear current again.
+      @observations[target] = entry.merge(refresh_failed: true) if entry.is_a?(Hash)
     end
 
     def respond(response, status, value)

@@ -381,9 +381,15 @@ reader does not invent a zero distance or weaken People name matching.
 
 Refresh runs asynchronously and may activate Find My or select its People or
 Devices tab. Mixed requests read those tabs sequentially, with a separate bounded
-native invocation for each; source and exact name jointly identify cached data,
-refresh intervals, and failures. On older interfaces, it may open a mapped
-person's or device's read-only detail card to
+native invocation for each: 30 seconds inside the reader and a 35-second outer
+process limit. Tab and row transitions use bounded passive settling, not repeated
+commands. Source and exact name jointly identify cached data, refresh intervals,
+and failures. Concurrent requests share one worker, and each mapping waits two
+minutes after its last completed attempt before another refresh. This cooldown
+uses a monotonic clock; a clock adjustment does not start duplicate work. Cached
+observations are returned immediately while an eligible refresh runs. The
+`refreshing` flag covers only the requested mappings. On older interfaces, it may
+open a mapped person's or device's read-only detail card to
 verify the exact name separately from the combined sidebar label. The same row
 must be selected, and a preexisting header cannot validate selecting another row.
 Ambiguous candidates remain unavailable. It never invokes sharing actions or
@@ -408,7 +414,11 @@ background collection timer, request log, or coordinate extraction. A displayed
 `Now` or explicit age in the sidebar supplies the observation time. `Paused` is
 always marked paused with no observation time; directions travel times are never freshness
 evidence. Reads expire after 15 minutes, and observations older than two hours
-are discarded. Manual must distinguish these actual observations from calendar
+are discarded. A temporary missing row or reader failure retains a prior verified
+observation as stale until that original expiry; it never advances the source
+timestamp or cache age. Permission denial removes the affected cached observation.
+The memory cache is cleared when the helper restarts. Manual must distinguish
+these actual observations from calendar
 locations, which are plans. Responses are private and never cached by a CDN.
 Existing Find My place labels, including Home and Work, are preserved. The helper
 does not guess a place from a city, calendar entry, distance, or device name.

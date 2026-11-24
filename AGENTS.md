@@ -128,7 +128,12 @@ LaunchAgent state, which can contain secrets.
   A device battery or connection status is not a location timestamp. Do not infer
   a timestamp for Me; use an explicitly mapped device with its own observation.
   Paused has no trustworthy time and must never appear current. Ambiguous or
-  unsupported rows remain unavailable. Keep latest observations only in memory,
+  unsupported rows cannot create a new observation. A transient reader failure
+  may retain a previously verified observation as stale only until its original
+  expiry; never advance its timestamp. Permission denial must purge it. Keep one
+  serialized refresh worker, coalesce in-flight mappings, and measure the
+  completion cooldown with a monotonic clock. Keep latest observations only in
+  memory,
   without location history or scheduled collection.
 - Keep helper failures isolated from application checks. A successful health
   response proves process readiness, not Accessibility permission or a live
