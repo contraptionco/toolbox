@@ -119,7 +119,19 @@ struct FindMyInfoAddress {
     }
 }
 
-#if MANUAL_LOCATION_DEVICE_TEST
+struct FindMySession {
+    struct Fixture: Decodable { let present: Bool; let locked: Bool?; let onConsole: Bool?; let loginDone: Bool? }
+    static func unavailableReason(_ value: Fixture) -> String? {
+        if value.locked == true { return "source_locked" }
+        if !value.present || value.onConsole != true || value.loginDone != true { return "source_unavailable" }
+        return nil
+    }
+}
+
+#if MANUAL_LOCATION_SESSION_TEST
+let fixtures = try JSONDecoder().decode([FindMySession.Fixture].self, from: FileHandle.standardInput.readDataToEndOfFile())
+FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { FindMySession.unavailableReason($0) }))
+#elseif MANUAL_LOCATION_DEVICE_TEST
 let fixtures = try JSONDecoder().decode([LegacyFindMyRow.Fixture].self, from: FileHandle.standardInput.readDataToEndOfFile())
 FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { FindMyDeviceObservation.validated($0) }))
 #elseif MANUAL_LOCATION_INFO_TEST
@@ -160,6 +172,15 @@ let tabName = sourceKind == "device" ? "Devices" : "People"
 guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary) else {
     emit(Output(error: "permission_required"), code: 77)
 }
+
+// Read only session metadata before activating Find My. A locked console does
+// not expose a usable Accessibility tree; do not repeatedly drive the app or
+// confuse that state with a timeout. Missing lock metadata is not proof of a lock.
+let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+if let reason = FindMySession.unavailableReason(.init(present: session != nil,
+    locked: session?["CGSSessionScreenIsLocked"] as? Bool,
+    onConsole: session?["kCGSSessionOnConsoleKey"] as? Bool,
+    loginDone: session?["kCGSessionLoginDoneKey"] as? Bool)) { emit(Output(error: reason), code: 69) }
 
 var deadline = Date().addingTimeInterval(30)
 func runLoop(_ seconds: TimeInterval) {

@@ -393,9 +393,10 @@ open a mapped person's or device's read-only detail card to
 verify the exact name separately from the combined sidebar label. The same row
 must be selected, and a preexisting header cannot validate selecting another row.
 Ambiguous candidates remain unavailable. It never invokes sharing actions or
-context menus. A missing Accessibility grant returns `permission_required`; a
-locked session, unavailable app, missing person, or unsupported interface remains
-unavailable. Device support currently requires the verified legacy sidebar and
+context menus. A missing Accessibility grant returns `permission_required`. A
+locked session returns `source_locked` before activating Find My. An unavailable
+app, missing person, or unsupported interface cannot produce a new observation.
+Device support currently requires the verified legacy sidebar and
 detail-card layout; unsupported layouts fail closed. It never presses device
 actions such as Play Sound, Mark As Lost, or Erase.
 
@@ -413,12 +414,19 @@ Only the latest observations are held in memory. There is no location history,
 background collection timer, request log, or coordinate extraction. A displayed
 `Now` or explicit age in the sidebar supplies the observation time. `Paused` is
 always marked paused with no observation time; directions travel times are never freshness
-evidence. Reads expire after 15 minutes, and observations older than two hours
-are discarded. A temporary missing row or reader failure retains a prior verified
-observation as stale until that original expiry; it never advances the source
-timestamp or cache age. Permission denial removes the affected cached observation.
-The memory cache is cleared when the helper restarts. Manual must distinguish
-these actual observations from calendar
+evidence. A reading is current for at most 15 minutes. A locked Mac, temporary
+missing row, or reader failure can retain the complete prior verified observation
+as **stale**, bounded to 24 hours from both its original observation time and
+successful read. Each returned observation includes its original `checkedAt`;
+neither timestamp advances on cache reads or failed refreshes. The top-level
+`checkedAt` is the last refresh attempt, and `reason` describes a source failure.
+Paused readings still expire after 15 minutes because they have no observation
+timestamp. Permission denial removes the affected cached observation.
+The memory cache is cleared when the helper restarts. Unrelated Toolbox commits
+do not restart it: its health revision fingerprints only helper code,
+dependencies, interpreter, runtime paths, and the private key. Relevant changes
+still restart it. There is no retained location after a reboot until a successful
+read with the Mac unlocked. Manual must distinguish these last-known observations from calendar
 locations, which are plans. Responses are private and never cached by a CDN.
 Existing Find My place labels, including Home and Work, are preserved. The helper
 does not guess a place from a city, calendar entry, distance, or device name.

@@ -7,7 +7,7 @@ module ManualLocation
   class SourceError < StandardError
     attr_reader :code
     def initialize(code)
-      @code = %w[permission_required source_unavailable].include?(code) ? code : 'source_unavailable'
+      @code = %w[permission_required source_unavailable source_locked].include?(code) ? code : 'source_unavailable'
       super('Find My is unavailable.')
     end
   end
