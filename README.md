@@ -347,9 +347,26 @@ The key is a separate, narrow credential. Do not reuse an Apple, 1Password, or
 application signing credential. Keep it out of shell arguments, logs, and Git.
 The heartbeat compiles `native/find_my_reader.swift`, installs the locked Ruby
 dependencies, and starts only this LaunchAgent when the private configuration
-exists. Grant Accessibility access in macOS Settings to
-`~/code/toolbox/.runtime/manual-location/find-my-reader`. A changed native binary
-may need approval again; unrelated Toolbox releases preserve that binary.
+exists. In **System Settings → Privacy & Security → Accessibility**, grant access
+to both `~/code/toolbox/.runtime/manual-location/find-my-reader` and the Ruby
+executable that launches this helper. Read the exact interpreter path from the
+installed LaunchAgent without printing its environment:
+
+```sh
+/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \
+  "$HOME/Library/LaunchAgents/co.contraption.toolbox.manual-location.plist"
+```
+
+For example, the current installation uses
+`/Users/philip/.asdf/installs/ruby/3.4.1/bin/ruby`. Use the command's actual output;
+the version and path can change. A changed reader or interpreter may need approval
+again; unrelated Toolbox releases preserve the reader binary.
+
+If `permission_required` persists with the reader enabled, check the exact Ruby
+entry too. macOS attributes this LaunchAgent's child Accessibility requests to
+Ruby as the responsible process, so the reader's grant alone is insufficient.
+The reader starts fresh for every refresh; restarting it does not grant its
+parent permission. Do not grant unrelated interpreters or change the TCC database.
 
 `GET /healthz` reports the helper revision, not Find My availability. Authenticated
 `POST /v1/locations` accepts `people: [{personId, findMyName}]` and `refresh`.

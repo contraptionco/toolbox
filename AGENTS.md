@@ -109,6 +109,11 @@ LaunchAgent state, which can contain secrets.
   extract Apple credentials, decrypt caches, change sharing, or bypass macOS
   permissions. Refresh may open Find My and select People, but never a person or
   a sharing action. Keep native execution and HTTP requests bounded.
+- Accessibility approval covers the reader and its responsible Ruby parent.
+  Read the interpreter path from the installed helper LaunchAgent's first
+  `ProgramArguments` entry; do not assume a fixed Ruby version or grant unrelated
+  interpreters. A healthy helper and an enabled reader entry alone do not prove
+  the parent's permission. Use System Settings, never TCC database edits.
 - Preserve freshness: a directions ETA is not a location observation time.
   Paused has no trustworthy time and must never appear current. Ambiguous or
   unsupported rows remain unavailable. Keep latest observations only in memory,
