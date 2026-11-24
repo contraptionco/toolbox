@@ -111,4 +111,6 @@ var rows = readRows()
 let settleUntil = min(Date().addingTimeInterval(3), deadline)
 while Date() < settleUntil { runLoop(0.25) }
 if Date() < deadline { rows = readRows() }
+// A failed activation must not relabel an old Accessibility tree as refreshed.
+guard process.isActive else { emit(Output(error: "source_unavailable"), code: 69) }
 emit(Output(rows: rows))
