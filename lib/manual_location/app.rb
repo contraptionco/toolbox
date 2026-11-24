@@ -17,7 +17,7 @@ module ManualLocation
     MAX_NAMES = 32
     REFRESH_INTERVAL = 120
     FRESH_SECONDS = 15 * 60
-    EXPIRE_SECONDS = 2 * 60 * 60
+    EXPIRE_SECONDS = 24 * 60 * 60
 
     def initialize(config:, source:, revision:, clock: -> { Time.now },
                    monotonic: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) },
@@ -197,18 +197,20 @@ module ManualLocation
       entry = @observations[source_id]
       return base.merge(status: 'unavailable') unless entry.is_a?(Hash)
       checked = entry[:checked_at]
-      return base.merge(status: 'unavailable') unless checked.is_a?(Time) && (0..FRESH_SECONDS).cover?(now - checked)
+      return base.merge(status: 'unavailable') unless checked.is_a?(Time) && (0..EXPIRE_SECONDS).cover?(now - checked)
       label = entry[:label].to_s.gsub(/[\x00-\x1f\x7f]/, ' ').strip[0, 160]
       label = label.byteslice(0, 320).scrub('')
       if entry[:status] == 'paused'
-        return base.merge(status: 'paused', observedAt: nil, label: label.empty? ? nil : label).reject { |key, value| key == :label && value.nil? }
+        return base.merge(status: 'unavailable') if now - checked > FRESH_SECONDS
+        return base.merge(status: 'paused', observedAt: nil, checkedAt: checked.utc.iso8601, label: label.empty? ? nil : label).reject { |key, value| key == :label && value.nil? }
       end
       observed = entry[:observed_at]
       return base.merge(status: 'unavailable') unless observed.is_a?(Time)
       age = now - observed
       return base.merge(status: 'unavailable') unless age >= -60 && age <= EXPIRE_SECONDS
       return base.merge(status: 'unavailable') if label.empty?
-      result = base.merge(status: age <= FRESH_SECONDS && !entry[:refresh_failed] && !@errors[source_id] ? 'ready' : 'stale', observedAt: observed.utc.iso8601, label: label)
+      ready = age <= FRESH_SECONDS && now - checked <= FRESH_SECONDS && !entry[:refresh_failed] && !@errors[source_id]
+      result = base.merge(status: ready ? 'ready' : 'stale', observedAt: observed.utc.iso8601, checkedAt: checked.utc.iso8601, label: label)
       address = FindMySource.clean_address(entry[:address])
       address ? result.merge(address: address) : result
     end

@@ -16,7 +16,7 @@ class ManualLocationNativeTest < Minitest::Test
   def self.compile_reader(mode = 'MANUAL_LOCATION_TEST')
     @readers ||= {}
     return @readers[mode] if @readers[mode]
-    raise 'Unknown fixture mode.' unless %w[MANUAL_LOCATION_TEST MANUAL_LOCATION_INFO_TEST MANUAL_LOCATION_DEVICE_TEST].include?(mode)
+    raise 'Unknown fixture mode.' unless %w[MANUAL_LOCATION_TEST MANUAL_LOCATION_INFO_TEST MANUAL_LOCATION_DEVICE_TEST MANUAL_LOCATION_SESSION_TEST].include?(mode)
 
     source = File.expand_path('../native/find_my_reader.swift', __dir__)
     # Never run a production reader as a fixture test. The compiled test branch
@@ -38,6 +38,20 @@ class ManualLocationNativeTest < Minitest::Test
       detailName: 'Alex', candidateCount: 1, selected: true,
       wasSelected: false, hadMatchingHeader: false
     }.merge(changes)
+  end
+
+  def test_session_state_distinguishes_a_locked_console_without_ui_access
+    fixtures = [
+      { present: true, locked: true, onConsole: true, loginDone: true },
+      { present: true, locked: false, onConsole: true, loginDone: true },
+      { present: true, locked: nil, onConsole: true, loginDone: true },
+      { present: false, locked: nil, onConsole: nil, loginDone: nil },
+      { present: true, locked: false, onConsole: false, loginDone: true },
+      { present: true, locked: false, onConsole: true, loginDone: false }
+    ]
+    stdout, stderr, status = Open3.capture3(self.class.compile_reader('MANUAL_LOCATION_SESSION_TEST'), stdin_data: JSON.generate(fixtures))
+    assert status.success?, stderr
+    assert_equal ['source_locked', nil, nil, 'source_unavailable', 'source_unavailable', 'source_unavailable'], JSON.parse(stdout)
   end
 
   def canonical(*fixtures)

@@ -129,12 +129,15 @@ LaunchAgent state, which can contain secrets.
   a timestamp for Me; use an explicitly mapped device with its own observation.
   Paused has no trustworthy time and must never appear current. Ambiguous or
   unsupported rows cannot create a new observation. A transient reader failure
-  may retain a previously verified observation as stale only until its original
-  expiry; never advance its timestamp. Permission denial must purge it. Keep one
+  may retain a previously verified observation as stale for at most 24 hours from
+  its original observation and successful read; never advance either timestamp.
+  Detect a locked session before activating Find My and report `source_locked`.
+  Do not change lock settings or decrypt Apple caches. Permission denial must purge it. Keep one
   serialized refresh worker, coalesce in-flight mappings, and measure the
   completion cooldown with a monotonic clock. Keep latest observations only in
-  memory,
-  without location history or scheduled collection.
+  memory, without location history or scheduled collection. Preserve that cache
+  across unrelated Toolbox commits; helper code, dependency, interpreter, runtime
+  path, or credential changes must still restart the service.
 - Keep helper failures isolated from application checks. A successful health
   response proves process readiness, not Accessibility permission or a live
   location. Tests use synthetic rows, fixture checkouts, and mocked launchctl.

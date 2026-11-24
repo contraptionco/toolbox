@@ -10,15 +10,17 @@ class ManualLocationServiceTest < Minitest::Test
   end
   class Runner
     attr_reader :calls
+    attr_accessor :revision
     def initialize
       @calls = []
+      @revision = REVISION
     end
     def capture3(*arguments, **options)
       @calls << [arguments, options]
       output = case arguments
                when ['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'] then "main\n"
                when ['git', 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'] then ''
-               when ['git', 'rev-parse', 'HEAD'], ['git', 'rev-parse', 'refs/remotes/origin/main'] then "#{REVISION}\n"
+               when ['git', 'rev-parse', 'HEAD'], ['git', 'rev-parse', 'refs/remotes/origin/main'] then "#{@revision}\n"
                else ''
                end
       if arguments[0, 2] == ['/usr/bin/xcrun', 'swiftc']
@@ -34,6 +36,11 @@ class ManualLocationServiceTest < Minitest::Test
     @home = File.join(@directory, 'home')
     @runtime = File.join(@repo, '.runtime', 'manual-location')
     FileUtils.mkdir_p([@runtime, @home, File.join(@repo, 'native')])
+    ManualLocation::Revision::FILES.each do |relative|
+      path = File.join(@repo, relative)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "fixture #{relative}")
+    end
     @saved_env = %w[TOOLBOX_PRODUCTION_REPO_DIR TOOLBOX_REPO_DIR OP_SERVICE_ACCOUNT_TOKEN].to_h { |key| [key, ENV[key]] }
     ENV['TOOLBOX_PRODUCTION_REPO_DIR'] = @repo
     ENV.delete('TOOLBOX_REPO_DIR')
@@ -42,7 +49,7 @@ class ManualLocationServiceTest < Minitest::Test
     @key = 'test-key-' + 'y' * 43
     @config = File.join(@runtime, 'config.json')
     File.write(@config, JSON.generate(key: @key), perm: 0o600)
-    @expected = "#{REVISION}:#{Digest::SHA256.file(@config).hexdigest}"
+    @expected = ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home)
     @runner = Runner.new
     @health = [nil, @expected]
   end
@@ -94,6 +101,43 @@ class ManualLocationServiceTest < Minitest::Test
     @runner.calls.clear
     @health = [nil, @expected]
     assert service.ensure_running
+    refute @runner.calls.any? { |arguments, _| arguments.first == '/usr/bin/xcrun' }
+  end
+
+  def test_unrelated_toolbox_commits_keep_the_healthy_helper_and_its_memory_cache
+    assert service.ensure_running
+    @runner.calls.clear
+    @runner.revision = 'c' * 40
+    File.write(File.join(@repo, 'config.rb'), 'unrelated application configuration')
+    @health = [@expected]
+    assert service.ensure_running
+    assert @runner.calls.all? { |arguments, _| arguments.first == 'git' }
+    assert_equal @expected, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home)
+  end
+
+  def test_helper_code_dependencies_and_private_key_changes_invalidate_the_revision
+    original = @expected
+    ManualLocation::Revision::FILES.each do |relative|
+      path = File.join(@repo, relative)
+      previous = File.read(path)
+      File.write(path, previous + '\nchange')
+      refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home), relative
+      File.write(path, previous)
+    end
+    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/other/ruby', home: @home)
+    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home + '-other')
+    File.write(@config, JSON.generate(key: 'replacement-' + 'z' * 43), perm: 0o600)
+    refute_equal original, ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home)
+  end
+
+  def test_changed_helper_restarts_but_does_not_recompile_unchanged_native_source
+    assert service.ensure_running
+    @runner.calls.clear
+    File.write(File.join(@repo, 'lib/manual_location/app.rb'), 'changed helper implementation')
+    expected = ManualLocation::Revision.current(repo: @repo, config_path: @config, ruby: '/fixture/ruby/bin/ruby', home: @home)
+    @health = [@expected, expected]
+    assert service.ensure_running
+    assert_includes @runner.calls.map(&:first), ['launchctl', 'kickstart', '-k', 'gui/501/co.contraption.toolbox.manual-location']
     refute @runner.calls.any? { |arguments, _| arguments.first == '/usr/bin/xcrun' }
   end
 

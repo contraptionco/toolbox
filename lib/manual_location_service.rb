@@ -7,6 +7,7 @@ require 'rbconfig'
 require_relative 'production_guard'
 require_relative 'command_runner'
 require_relative 'manual_location/config'
+require_relative 'manual_location/revision'
 require_relative '../config'
 
 module Core
@@ -43,9 +44,7 @@ module Core
       Core::ProductionGuard.validate_directory!(@repo)
       Core::ProductionGuard.verify_checkout!(@repo, command_runner: @runner)
       ManualLocation::Configuration.load(config_path)
-      revision = capture!('git', 'rev-parse', 'HEAD').strip
-      raise 'Invalid location bridge revision' unless revision.match?(/\A[0-9a-f]{40}\z/)
-      expected = "#{revision}:#{Digest::SHA256.file(config_path).hexdigest}"
+      expected = ManualLocation::Revision.current(repo: @repo, config_path: config_path, ruby: @ruby, home: @home)
       return true if @health_reader.call == expected
 
       install_dependencies

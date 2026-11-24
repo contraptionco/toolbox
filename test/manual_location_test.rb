@@ -149,6 +149,8 @@ class ManualLocationTest < Minitest::Test
       request(uri)
       assert_empty jobs
       now += 901
+      assert_equal 'stale', app.snapshot([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])[:people][0][:status]
+      now = NOW + 86_401
       assert_equal 'unavailable', app.snapshot([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])[:people][0][:status]
     end
   end
@@ -291,8 +293,9 @@ class ManualLocationTest < Minitest::Test
     people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
     app.start_refresh(people)
     assert app.snapshot(people)[:people][0].key?(:address)
-    now += 901
+    now += 86_401
     refute app.snapshot(people)[:people][0].key?(:address)
+    now = NOW + 901
     app.start_refresh(people)
     assert_equal 'stale', app.snapshot(people)[:people][0][:status]
     assert app.snapshot(people)[:people][0].key?(:address)
@@ -383,7 +386,7 @@ class ManualLocationTest < Minitest::Test
     assert_equal 'stale', retained[:people][0][:status]
     assert_equal original, retained[:people][0][:observedAt]
     assert_equal 'source_unavailable', retained[:reason]
-    now = NOW + 901
+    now = NOW + 86_401
     app.start_refresh(people)
     jobs.shift.call
     assert_equal 'unavailable', app.snapshot(people)[:people][0][:status]
@@ -445,7 +448,7 @@ class ManualLocationTest < Minitest::Test
     app.start_refresh(people)
     assert_equal 1, jobs.length
     jobs.shift.call
-    now = NOW + 901
+    now = NOW + 86_401
     assert_equal 'unavailable', app.snapshot(people)[:people][0][:status]
   end
 
@@ -492,6 +495,63 @@ class ManualLocationTest < Minitest::Test
     mode = :ready
     app.start_refresh(people)
     assert_equal 'ready', app.snapshot(people)[:people][0][:status]
+  end
+
+  def test_locked_source_preserves_last_known_data_with_both_original_timestamps
+    now = NOW
+    mode = :ready
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      raise ManualLocation::SourceError, mode.to_s unless mode == :ready
+      names.to_h { |name| [name, { status: 'located', label: 'Home',
+        address: '12 Example Street, Sample City, NY 10000', observed_at: NOW - 60, checked_at: NOW }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture',
+      clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { block.call })
+    person = { 'personId' => PERSON, 'findMyName' => 'Person One' }
+    app.start_refresh([person])
+    original = app.snapshot([person])[:people][0]
+    assert_equal NOW.utc.iso8601, original[:checkedAt]
+    now += 20 * 60
+    mode = :source_locked
+    app.start_refresh([person])
+    locked = app.snapshot([person])
+    assert_equal 'source_locked', locked[:reason]
+    assert_equal 'stale', locked[:people][0][:status]
+    assert_equal original[:observedAt], locked[:people][0][:observedAt]
+    assert_equal original[:checkedAt], locked[:people][0][:checkedAt]
+    assert_equal original[:address], locked[:people][0][:address]
+    changed = person.merge('findMyName' => 'Different name')
+    assert_equal 'unavailable', app.snapshot([changed])[:people][0][:status]
+    assert_equal 'unavailable', app.snapshot([person.merge('findMySource' => 'device')])[:people][0][:status]
+    now = NOW + 86_341
+    app.start_refresh([person])
+    assert_equal 'unavailable', app.snapshot([person])[:people][0][:status]
+    now += 121
+    mode = :permission_required
+    app.start_refresh([person])
+    assert_equal 'permission_required', app.snapshot([person])[:reason]
+    refute_includes JSON.generate(app.snapshot([person])), 'Home'
+  end
+
+  def test_locked_source_without_cache_is_explicit_and_paused_data_does_not_gain_a_day_of_freshness
+    now = NOW
+    source = Object.new
+    source.define_singleton_method(:refresh) { |names, source:| raise ManualLocation::SourceError, 'source_locked' }
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture',
+      clock: -> { now }, monotonic: -> { now.to_f }, thread: ->(&block) { block.call })
+    people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
+    app.start_refresh(people)
+    result = app.snapshot(people)
+    assert_equal 'source_locked', result[:reason]
+    assert_equal 'unavailable', result[:people][0][:status]
+    refute result[:people][0].key?(:checkedAt)
+    source.define_singleton_method(:refresh) { |names, source:| names.to_h { |name| [name, { status: 'paused', label: 'Home', observed_at: nil, checked_at: now }] } }
+    now += 121
+    app.start_refresh(people)
+    assert_equal 'paused', app.snapshot(people)[:people][0][:status]
+    now += 901
+    assert_equal 'unavailable', app.snapshot(people)[:people][0][:status]
   end
 
   private
