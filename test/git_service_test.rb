@@ -250,17 +250,18 @@ class GitServiceTest < Minitest::Test
     end
   end
 
-  def test_manual_sensor_configuration_recreates_once_without_rewriting_credentials
+  def test_manual_device_configuration_recreates_once_without_rewriting_credentials
     Dir.mktmpdir do |directory|
       repo = File.join(directory, 'repo')
       FileUtils.mkdir_p(File.join(repo, '.git'))
       File.binwrite(File.join(repo, 'compose.yml'), "services: {}\n")
       service = Marshal.load(Marshal.dump(Config::GIT_SERVICES.find { |entry| entry[:name] == 'manual' }))
-      service.merge!(local_path: repo, auto_update: false, env_config: "DATABASE_URL=fixture-only\n",
+      service.merge!(local_path: repo, auto_update: false,
+                     env_config: "DATABASE_URL=fixture-only\nHUE_APPLICATION_KEY=fixture-key\n",
                      deployment_marker_path: File.join(directory, 'manual.head'))
       service.delete(:build_cmd)
       settings = service[:compose_override][:services][:app].delete(:environment)
-      refute_nil settings, 'The production app must receive its nonsecret sensor settings'
+      refute_nil settings, 'The production app must receive its nonsecret device settings'
       compose_calls = []
       original_env = nil
       runner = ->(*_arguments, **_options) { ["container-id\n", '', FakeStatus.new(true)] }
@@ -283,8 +284,11 @@ class GitServiceTest < Minitest::Test
       override = YAML.safe_load_file(File.join(repo, 'compose.override.yml'))
       assert_equal 'http://awair-elem-1425e2.local', override.dig('services', 'app', 'environment', 'AWAIR_LOCAL_URL')
       assert_equal '70:88:6B:14:25:E2', override.dig('services', 'app', 'environment', 'AWAIR_DEVICE_MAC')
+      assert_equal 'https://0017886136a4.local', override.dig('services', 'app', 'environment', 'HUE_BRIDGE_URL')
+      assert_equal '001788FFFE6136A4', override.dig('services', 'app', 'environment', 'HUE_BRIDGE_ID')
+      refute override.dig('services', 'app', 'environment').key?('HUE_APPLICATION_KEY')
       refute override.dig('services', 'migrate').key?('environment')
-      assert_equal 'DATABASE_URL=fixture-only', original_env
+      assert_equal "DATABASE_URL=fixture-only\nHUE_APPLICATION_KEY=fixture-key", original_env
       assert_equal original_env, File.binread(File.join(repo, '.env'))
     end
   end
