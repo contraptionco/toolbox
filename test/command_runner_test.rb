@@ -90,11 +90,14 @@ class CommandRunnerTest < Minitest::Test
       assert_raises(Core::CommandRunner::TimeoutError) do
         Core::CommandRunner.capture3(
           RbConfig.ruby, '-e', parent_code, parent_info, child_info, term_marker,
-          timeout: 0.5,
+          # This exercises descendant cleanup, not Ruby interpreter startup
+          # speed. Both interpreters must install their fixture before timeout.
+          timeout: 5,
           label: 'Process group fixture'
         )
       end
 
+      assert File.exist?(child_info), 'descendant fixture did not start before timeout'
       parent_pid, parent_pgid = File.read(parent_info).split.map(&:to_i)
       child_pid, child_pgid = File.read(child_info).split.map(&:to_i)
       assert_equal parent_pid, parent_pgid
