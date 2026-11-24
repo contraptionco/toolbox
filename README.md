@@ -375,6 +375,9 @@ original People mapping. Use the exact displayed device name for a phone that
 supplies someone's own location. `Me` without an observation time is not a
 substitute. Responses retain `source: "find-my"` and include `findMySource` so
 Manual can distinguish a device observation from a People observation.
+Devices may omit distance while still reporting a location and explicit age.
+That verified device layout uses separate label/age fields internally; the
+reader does not invent a zero distance or weaken People name matching.
 
 Refresh runs asynchronously and may activate Find My or select its People or
 Devices tab. Mixed requests read those tabs sequentially, with a separate bounded
@@ -389,6 +392,16 @@ locked session, unavailable app, missing person, or unsupported interface remain
 unavailable. Device support currently requires the verified legacy sidebar and
 detail-card layout; unsupported layouts fail closed. It never presses device
 actions such as Play Sound, Mark As Lost, or Erase.
+
+For supported layouts, the reader opens the verified bubble's **More Info**
+control and reads the Info panel's separate name, street address, and observation
+age fields. It closes only that read-only panel, waits for the sidebar to return,
+and verifies the selected source again. A response may include `address` alongside
+`label` when the exact identity and both observation ages agree. Generic city
+labels, missing timestamps, mismatched panels, and unsupported address formats
+never become precise addresses. Opening Info does not invoke its sharing or
+settings controls. Address data has the same private, latest-only lifetime as
+the observation and is omitted for paused, expired, or unavailable readings.
 
 Only the latest observations are held in memory. There is no location history,
 background collection timer, request log, or coordinate extraction. A displayed

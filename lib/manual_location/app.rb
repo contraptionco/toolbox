@@ -173,6 +173,7 @@ module ManualLocation
       checked = entry[:checked_at]
       return base.merge(status: 'unavailable') unless checked.is_a?(Time) && (0..FRESH_SECONDS).cover?(now - checked)
       label = entry[:label].to_s.gsub(/[\x00-\x1f\x7f]/, ' ').strip[0, 160]
+      label = label.byteslice(0, 320).scrub('')
       if entry[:status] == 'paused'
         return base.merge(status: 'paused', observedAt: nil, label: label.empty? ? nil : label).reject { |key, value| key == :label && value.nil? }
       end
@@ -181,7 +182,9 @@ module ManualLocation
       age = now - observed
       return base.merge(status: 'unavailable') unless age >= -60 && age <= EXPIRE_SECONDS
       return base.merge(status: 'unavailable') if label.empty?
-      base.merge(status: age <= FRESH_SECONDS && !@errors[source_id] ? 'ready' : 'stale', observedAt: observed.utc.iso8601, label: label)
+      result = base.merge(status: age <= FRESH_SECONDS && !@errors[source_id] ? 'ready' : 'stale', observedAt: observed.utc.iso8601, label: label)
+      address = FindMySource.clean_address(entry[:address])
+      address ? result.merge(address: address) : result
     end
 
     def mapping_key(person)
