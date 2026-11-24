@@ -250,6 +250,45 @@ class GitServiceTest < Minitest::Test
     end
   end
 
+  def test_manual_sensor_configuration_recreates_once_without_rewriting_credentials
+    Dir.mktmpdir do |directory|
+      repo = File.join(directory, 'repo')
+      FileUtils.mkdir_p(File.join(repo, '.git'))
+      File.binwrite(File.join(repo, 'compose.yml'), "services: {}\n")
+      service = Marshal.load(Marshal.dump(Config::GIT_SERVICES.find { |entry| entry[:name] == 'manual' }))
+      service.merge!(local_path: repo, auto_update: false, env_config: "DATABASE_URL=fixture-only\n",
+                     deployment_marker_path: File.join(directory, 'manual.head'))
+      service.delete(:build_cmd)
+      settings = service[:compose_override][:services][:app].delete(:environment)
+      refute_nil settings, 'The production app must receive its nonsecret sensor settings'
+      compose_calls = []
+      original_env = nil
+      runner = ->(*_arguments, **_options) { ["container-id\n", '', FakeStatus.new(true)] }
+
+      capture_output do
+        Core::GitService.stub(:prepare_release, { head: 'head', cloned: false }) do
+          Core::GitService.stub(:run_command, runner) do
+            Core::GitService.stub(:docker_compose_up, ->(path, force_recreate:) { compose_calls << [path, force_recreate] }) do
+              Core::GitService.update_git_service(service)
+              original_env = File.binread(File.join(repo, '.env'))
+              service[:compose_override][:services][:app][:environment] = settings
+              Core::GitService.update_git_service(service)
+              Core::GitService.update_git_service(service)
+            end
+          end
+        end
+      end
+
+      assert_equal [[repo, true], [repo, true]], compose_calls
+      override = YAML.safe_load_file(File.join(repo, 'compose.override.yml'))
+      assert_equal 'http://awair-elem-1425e2.local', override.dig('services', 'app', 'environment', 'AWAIR_LOCAL_URL')
+      assert_equal '70:88:6B:14:25:E2', override.dig('services', 'app', 'environment', 'AWAIR_DEVICE_MAC')
+      refute override.dig('services', 'migrate').key?('environment')
+      assert_equal 'DATABASE_URL=fixture-only', original_env
+      assert_equal original_env, File.binread(File.join(repo, '.env'))
+    end
+  end
+
   def test_compose_up_failure_is_propagated
     runner = ->(*_arguments, **_options) { ['', 'compose failed', FakeStatus.new(false)] }
 

@@ -228,6 +228,12 @@ module Config
           app: {
             container_name: 'manual-app-1',
             pull_policy: 'never',
+            # This Mac's nonsecret LAN device settings belong to its deployment.
+            # Keep credentials in the 1Password ENV field, supplied at runtime.
+            environment: {
+              AWAIR_LOCAL_URL: 'http://awair-elem-1425e2.local',
+              AWAIR_DEVICE_MAC: '70:88:6B:14:25:E2'
+            },
             logging: { driver: 'local', options: { 'max-size' => '10m', 'max-file' => '3' } }
           }
         },
