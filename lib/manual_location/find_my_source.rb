@@ -13,7 +13,7 @@ module ManualLocation
   end
 
   class FindMySource
-    TIMEOUT = 20
+    TIMEOUT = 35
     MAX_OUTPUT = 128 * 1024
 
     def initialize(executable:, runner: nil, clock: -> { Time.now })
