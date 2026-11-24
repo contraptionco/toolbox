@@ -254,8 +254,8 @@ seed, then starts the app on `127.0.0.1:3007`. The app and migration containers
 join the existing `toolbox_network`; no additional PostgreSQL server is created.
 
 The `ENV` field of the `manual` item in the configured 1Password vault contains
-the full multiline production environment. Toolbox writes it to Manual's ignored
-`.env` with owner-only permissions. Compose parses the dotenv values, including
+the multiline production credentials and application settings. Toolbox writes
+it to Manual's ignored `.env` with owner-only permissions. Compose parses the dotenv values, including
 quoted values; do not split this field into Docker build arguments. Set
 `DATABASE_URL` to the existing database connection string, using `postgres` as
 the hostname when targeting Toolbox's PostgreSQL container. The database itself
@@ -267,6 +267,26 @@ manages this tunnel's active ingress remotely, so the corresponding DNS and
 remote ingress entry must also be configured while preserving all existing
 routes. Verify the public sign-in page and the application flow after deployment,
 as well as the app's `/api/health` endpoint.
+
+#### Bedroom air quality
+
+Toolbox supplies the bedroom Awair's nonsecret LAN settings through Manual's
+`app.environment` Compose override in `config.rb`:
+
+```text
+AWAIR_LOCAL_URL=http://awair-elem-1425e2.local
+AWAIR_DEVICE_MAC=70:88:6B:14:25:E2
+```
+
+These two deployment settings take precedence over the 1Password `ENV` field;
+do not duplicate them there. The hostname follows the device across DHCP address
+changes, and the MAC check prevents collecting readings from another device.
+Enable the Awair's Local API in its app. Manual connects from Docker using IPv4,
+checks device identity, and collects readings every five minutes. No cloud API
+key, new port mapping, or firewall rule is required. Changing these settings in
+`config.rb` causes the normal heartbeat to recreate Manual's containers and
+wait for health before recording the deployment. Other credentials stay in
+1Password.
 
 #### Find My locations
 
