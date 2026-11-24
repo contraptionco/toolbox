@@ -105,11 +105,13 @@ LaunchAgent state, which can contain secrets.
   narrow shared key. Profile mappings arrive from Manual in authenticated
   server-to-server requests. Never put names, locations, or credentials in logs,
   process arguments, LaunchAgent environment variables, or Git.
-- Read only explicitly mapped People rows through macOS Accessibility. Do not
+- Read only explicitly mapped People or Devices rows through macOS Accessibility. Do not
   extract Apple credentials, decrypt caches, change sharing, or bypass macOS
-  permissions. Refresh may open Find My, select People, and open an explicitly
-  mapped person's read-only detail card to verify their exact name. Never invoke
-  sharing actions or context menus. A candidate-name prefix is not identity;
+  permissions. Refresh may open Find My, select the explicitly requested source
+  tab, and open a mapped person's or device's read-only detail card to verify its
+  exact name. Keep source and name together in every cache and refresh identity.
+  Never invoke sharing, Play Sound, Lost Mode, erase, or context-menu actions.
+  A candidate-name prefix is not identity;
   legacy rows also require an exact detail header and current row selection.
   Keep native execution and HTTP requests bounded.
 - Accessibility approval covers the reader and its responsible Ruby parent.
@@ -118,6 +120,8 @@ LaunchAgent state, which can contain secrets.
   interpreters. A healthy helper and an enabled reader entry alone do not prove
   the parent's permission. Use System Settings, never TCC database edits.
 - Preserve freshness: a directions ETA is not a location observation time.
+  A device battery or connection status is not a location timestamp. Do not infer
+  a timestamp for Me; use an explicitly mapped device with its own observation.
   Paused has no trustworthy time and must never appear current. Ambiguous or
   unsupported rows remain unavailable. Keep latest observations only in memory,
   without location history or scheduled collection.

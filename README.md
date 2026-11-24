@@ -369,15 +369,26 @@ The reader starts fresh for every refresh; restarting it does not grant its
 parent permission. Do not grant unrelated interpreters or change the TCC database.
 
 `GET /healthz` reports the helper revision, not Find My availability. Authenticated
-`POST /v1/locations` accepts `people: [{personId, findMyName}]` and `refresh`.
-Refresh runs asynchronously and may activate Find My or select its People tab.
-On older interfaces, it may open a mapped person's read-only detail card to
+`POST /v1/locations` accepts `people: [{personId, findMyName, findMySource}]` and
+`refresh`. `findMySource` is `person` or `device`; omitting it preserves the
+original People mapping. Use the exact displayed device name for a phone that
+supplies someone's own location. `Me` without an observation time is not a
+substitute. Responses retain `source: "find-my"` and include `findMySource` so
+Manual can distinguish a device observation from a People observation.
+
+Refresh runs asynchronously and may activate Find My or select its People or
+Devices tab. Mixed requests read those tabs sequentially, with a separate bounded
+native invocation for each; source and exact name jointly identify cached data,
+refresh intervals, and failures. On older interfaces, it may open a mapped
+person's or device's read-only detail card to
 verify the exact name separately from the combined sidebar label. The same row
 must be selected, and a preexisting header cannot validate selecting another row.
 Ambiguous candidates remain unavailable. It never invokes sharing actions or
 context menus. A missing Accessibility grant returns `permission_required`; a
 locked session, unavailable app, missing person, or unsupported interface remains
-unavailable.
+unavailable. Device support currently requires the verified legacy sidebar and
+detail-card layout; unsupported layouts fail closed. It never presses device
+actions such as Play Sound, Mark As Lost, or Erase.
 
 Only the latest observations are held in memory. There is no location history,
 background collection timer, request log, or coordinate extraction. A displayed
@@ -386,6 +397,8 @@ always marked paused with no observation time; directions travel times are never
 evidence. Reads expire after 15 minutes, and observations older than two hours
 are discarded. Manual must distinguish these actual observations from calendar
 locations, which are plans. Responses are private and never cached by a CDN.
+Existing Find My place labels, including Home and Work, are preserved. The helper
+does not guess a place from a city, calendar entry, distance, or device name.
 
 Removing the private configuration disables the helper on the next heartbeat,
 unloads its own LaunchAgent, and leaves other services untouched. Optional-helper

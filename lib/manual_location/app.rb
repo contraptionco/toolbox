@@ -28,7 +28,7 @@ module ManualLocation
       @last_started = {}
       @pending = Set.new
       @checked_at = nil
-      @last_error = nil
+      @errors = {}
     end
 
     def call(request, response)
@@ -64,16 +64,17 @@ module ManualLocation
     def snapshot(people)
       @mutex.synchronize do
         now = @clock.call
-        { refreshing: @refreshing, checkedAt: @checked_at&.utc&.iso8601, reason: @last_error,
+        error = people.filter_map { |person| @errors[mapping_key(person)] }.first
+        { refreshing: @refreshing, checkedAt: @checked_at&.utc&.iso8601, reason: error,
           people: people.map { |person| visible_observation(person, now) } }.compact
       end
     end
 
     def start_refresh(people)
       should_start = @mutex.synchronize do
-        people.map { |person| person.fetch('findMyName') }.uniq.each do |name|
-          next if @last_started[name] && @clock.call - @last_started[name] < REFRESH_INTERVAL
-          @pending.add(name) if @pending.length < MAX_NAMES
+        people.map { |person| mapping_key(person) }.uniq.each do |target|
+          next if @last_started[target] && @clock.call - @last_started[target] < REFRESH_INTERVAL
+          @pending.add(target) if @pending.length < MAX_NAMES
         end
         next false if @refreshing || @pending.empty?
         @refreshing = true
@@ -83,7 +84,7 @@ module ManualLocation
 
       @thread.call do
         loop do
-          names = @mutex.synchronize do
+          targets = @mutex.synchronize do
             if @pending.empty?
               @refreshing = false
               nil
@@ -95,21 +96,31 @@ module ManualLocation
               selected
             end
           end
-          break unless names
-          begin
-            observations = @source.refresh(names)
-            @mutex.synchronize do
-              names.each { |name| @observations.delete(name); @observations[name] = observations[name] }
-              @observations.shift while @observations.length > MAX_NAMES
-              @last_started.delete_if { |_name, time| @clock.call - time > 600 }
-              @checked_at = @clock.call
-              @last_error = nil
-            end
-          rescue StandardError => error
-            @mutex.synchronize do
-              names.each { |name| @observations.delete(name) } if error.is_a?(SourceError) && error.code == 'permission_required'
-              @last_error = error.is_a?(SourceError) ? error.code : 'source_unavailable'
-              @checked_at = @clock.call
+          break unless targets
+          # Both sources operate the same Find My window. Read each tab
+          # sequentially; a device failure must not erase a person's result.
+          targets.group_by(&:first).each do |kind, group|
+            begin
+              observations = @source.refresh(group.map(&:last), source: kind)
+              @mutex.synchronize do
+                group.each do |target|
+                  @observations.delete(target)
+                  @observations[target] = observations[target.last]
+                  @errors.delete(target)
+                end
+                @observations.shift while @observations.length > MAX_NAMES
+                @last_started.delete_if { |_target, time| @clock.call - time > 600 }
+                @checked_at = @clock.call
+              end
+            rescue StandardError => error
+              @mutex.synchronize do
+                group.each do |target|
+                  @observations.delete(target) if error.is_a?(SourceError) && error.code == 'permission_required'
+                  @errors[target] = error.is_a?(SourceError) ? error.code : 'source_unavailable'
+                end
+                @errors.shift while @errors.length > MAX_NAMES
+                @checked_at = @clock.call
+              end
             end
           end
         end
@@ -139,23 +150,24 @@ module ManualLocation
       data = JSON.parse(body)
       people = data['people'] if data.is_a?(Hash)
       valid = people.is_a?(Array) && people.length.between?(1, MAX_PEOPLE) && people.all? do |person|
-        person.is_a?(Hash) && person.keys.sort == %w[findMyName personId] &&
+        person.is_a?(Hash) && (person.keys - %w[findMyName findMySource personId]).empty? &&
           person['personId'].is_a?(String) && Configuration::UUID.match?(person['personId']) &&
           person['findMyName'].is_a?(String) && person['findMyName'].length.between?(1, 200) &&
-          !person['findMyName'].match?(/[\x00-\x1f\x7f]/)
+          !person['findMyName'].match?(/[\x00-\x1f\x7f]/) &&
+          (!person.key?('findMySource') || %w[person device].include?(person['findMySource']))
       end
       unless valid && (data.keys - %w[people refresh]).empty? && [true, false].include?(data['refresh']) && people.map { |person| person['personId'].downcase }.uniq.length == people.length
         raise RequestError
       end
-      data.merge('people' => people.map { |person| person.merge('personId' => person['personId'].downcase) })
+      data.merge('people' => people.map { |person| person.merge('personId' => person['personId'].downcase, 'findMySource' => person.fetch('findMySource', 'person')) })
     rescue JSON::ParserError
       raise RequestError
     end
 
     def visible_observation(person, now)
       person_id = person.fetch('personId')
-      base = { personId: person_id, source: 'find-my' }
-      source_id = person.fetch('findMyName')
+      source_id = mapping_key(person)
+      base = { personId: person_id, source: 'find-my', findMySource: source_id.first }
       entry = @observations[source_id]
       return base.merge(status: 'unavailable') unless entry.is_a?(Hash)
       checked = entry[:checked_at]
@@ -169,7 +181,11 @@ module ManualLocation
       age = now - observed
       return base.merge(status: 'unavailable') unless age >= -60 && age <= EXPIRE_SECONDS
       return base.merge(status: 'unavailable') if label.empty?
-      base.merge(status: age <= FRESH_SECONDS && !@last_error ? 'ready' : 'stale', observedAt: observed.utc.iso8601, label: label)
+      base.merge(status: age <= FRESH_SECONDS && !@errors[source_id] ? 'ready' : 'stale', observedAt: observed.utc.iso8601, label: label)
+    end
+
+    def mapping_key(person)
+      [person.fetch('findMySource', 'person'), person.fetch('findMyName').unicode_normalize(:nfc)].freeze
     end
 
     def respond(response, status, value)

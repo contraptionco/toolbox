@@ -37,7 +37,7 @@ class ManualLocationTest < Minitest::Test
     jobs = []
     batches = []
     source = Object.new
-    source.define_singleton_method(:refresh) do |names|
+    source.define_singleton_method(:refresh) do |names, source:|
       batches << names
       {}
     end
@@ -96,7 +96,7 @@ class ManualLocationTest < Minitest::Test
   end
 
   def test_source_ignores_unrequested_rows_rejects_ambiguous_names_and_returns_safe_errors
-    source = ManualLocation::FindMySource.new(executable: '/unused', clock: -> { NOW }, runner: ->(_names) {
+    source = ManualLocation::FindMySource.new(executable: '/unused', clock: -> { NOW }, runner: ->(_names, source:) {
       JSON.generate(rows: [
         { name: 'Person One', description: 'Person One, 1 km, Home, Now' },
         { name: 'Person One', description: 'Person One, 3 km, Work, Now' },
@@ -110,7 +110,7 @@ class ManualLocationTest < Minitest::Test
     refute result.key?('Unrelated')
     assert_equal 'paused', result['Person Two'][:status]
     assert_equal 'Home', result['Person Three'][:label]
-    denied = ManualLocation::FindMySource.new(executable: '/unused', runner: ->(_names) { JSON.generate(error: 'permission_required') })
+    denied = ManualLocation::FindMySource.new(executable: '/unused', runner: ->(_names, source:) { JSON.generate(error: 'permission_required') })
     assert_equal 'permission_required', assert_raises(ManualLocation::SourceError) { denied.refresh(['Person One']) }.code
   end
 
@@ -119,7 +119,7 @@ class ManualLocationTest < Minitest::Test
     calls = []
     jobs = []
     source = Object.new
-    source.define_singleton_method(:refresh) do |names|
+    source.define_singleton_method(:refresh) do |names, source:|
       calls << names
       names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: NOW, checked_at: NOW }] }
     end
@@ -157,7 +157,7 @@ class ManualLocationTest < Minitest::Test
     now = NOW
     mode = :paused
     source = Object.new
-    source.define_singleton_method(:refresh) do |_names|
+    source.define_singleton_method(:refresh) do |_names, source:|
       raise ManualLocation::SourceError, 'permission_required' if mode == :denied
       { 'Person One' => { status: 'paused', label: 'Home', observed_at: nil, checked_at: now } }
     end
@@ -173,6 +173,73 @@ class ManualLocationTest < Minitest::Test
     assert_equal 'permission_required', app.snapshot([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])[:reason]
     assert_equal 'unavailable', app.snapshot([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])[:people][0][:status]
     refute_includes JSON.generate(app.snapshot([{ 'personId' => PERSON, 'findMyName' => 'Person One' }])), 'Home'
+  end
+
+  def test_source_kind_is_validated_and_defaults_to_person
+    jobs = []
+    app = ManualLocation::App.new(config: config, source: Object.new, revision: 'fixture', thread: ->(&block) { jobs << block })
+    with_server(app) do |uri|
+      [nil, '', 'people', 'devices', 1, {}].each do |kind|
+        assert_equal 400, request(uri, body: { people: [{ personId: PERSON, findMyName: 'Family phone', findMySource: kind }], refresh: true }).code.to_i
+      end
+      assert_empty jobs
+      response = request(uri, body: { people: [{ personId: PERSON, findMyName: 'Family phone' }], refresh: false })
+      assert_equal 'person', JSON.parse(response.body)['people'][0]['findMySource']
+      response = request(uri, body: { people: [{ personId: PERSON, findMyName: 'Family phone', findMySource: 'device' }], refresh: false })
+      assert_equal 'device', JSON.parse(response.body)['people'][0]['findMySource']
+    end
+  end
+
+  def test_person_and_device_names_have_independent_cache_refresh_and_error_state
+    now = NOW
+    fail_device = false
+    calls = []
+    jobs = []
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      calls << [source, names]
+      raise ManualLocation::SourceError, 'permission_required' if source == 'device' && fail_device
+      names.to_h { |name| [name, { status: 'located', label: source == 'person' ? 'Work' : 'Home', observed_at: now, checked_at: now }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, thread: ->(&block) { jobs << block })
+    person = { 'personId' => PERSON, 'findMyName' => 'Same name' }
+    device = { 'personId' => OTHER, 'findMyName' => 'Same name', 'findMySource' => 'device' }
+    app.start_refresh([person])
+    app.start_refresh([person.merge('findMySource' => 'person'), device])
+    assert_equal 1, jobs.length
+    jobs.shift.call
+    assert_equal [['person', ['Same name']], ['device', ['Same name']]], calls
+    result = app.snapshot([person, device])[:people]
+    assert_equal %w[Work Home], result.map { |row| row[:label] }
+    assert_equal %w[person device], result.map { |row| row[:findMySource] }
+    app.start_refresh([person, device])
+    assert_empty jobs
+    now += 21
+    fail_device = true
+    app.start_refresh([device])
+    jobs.shift.call
+    assert_equal 'unavailable', app.snapshot([device])[:people][0][:status]
+    assert_equal 'permission_required', app.snapshot([device])[:reason]
+    assert_equal 'ready', app.snapshot([person])[:people][0][:status]
+    refute app.snapshot([person]).key?(:reason)
+    app.start_refresh([person])
+    assert_equal 1, jobs.length
+  end
+
+  def test_native_source_and_exact_name_must_match_the_requested_kind
+    source = ManualLocation::FindMySource.new(executable: '/unused', clock: -> { NOW }, runner: ->(_names, source:) {
+      JSON.generate(rows: [
+        { name: 'Family phone', description: 'Family phone, 0 m, Home, Now' },
+        { name: 'Family phone', source: 'unknown', description: 'Family phone, 0 m, Office, Now' },
+        { name: 'Family phone extra', source: 'device', description: 'Family phone extra, 0 m, Work, Now' },
+        { name: 'José’s phone', source: 'device', description: 'José’s phone, 0 m, Home, Now' }
+      ])
+    })
+    assert_equal 'Home', source.refresh(['Family phone'])['Family phone'][:label]
+    assert_empty source.refresh(['Family phone'], source: 'device')
+    assert_equal NOW, source.refresh(["Jose\u0301’s phone"], source: 'device')["Jose\u0301’s phone"][:observed_at]
+    assert_empty source.refresh(['José’s phone'], source: 'person')
+    assert_raises(ManualLocation::SourceError) { source.refresh(['Family phone'], source: 'unknown') }
   end
 
   private

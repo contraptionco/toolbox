@@ -21,14 +21,16 @@ module ManualLocation
       @runner = runner || method(:run_reader)
     end
 
-    def refresh(names)
-      data = JSON.parse(@runner.call(names))
+    def refresh(names, source: 'person')
+      raise SourceError, 'source_unavailable' unless %w[person device].include?(source)
+      data = JSON.parse(@runner.call(names, source: source))
       raise SourceError, data['error'] if data['error']
       rows = data['rows']
       raise SourceError, 'source_unavailable' unless rows.is_a?(Array) && rows.length <= 128
       now = @clock.call
       names.to_h do |name|
-        matches = rows.select { |row| row.is_a?(Hash) && row['name'] == name && row['description'].is_a?(String) }
+        matches = rows.select { |row| row.is_a?(Hash) && row.fetch('source', 'person') == source &&
+                      row['name'].is_a?(String) && row['name'].unicode_normalize(:nfc) == name.unicode_normalize(:nfc) && row['description'].is_a?(String) }
                       .map { |row| [row['description'], row['selected'] == true] }.uniq
         # Duplicate display names cannot be mapped safely to a family account.
         [name, matches.length == 1 ? self.class.parse_row(name, matches.first[0], now, selected: matches.first[1]) : nil]
@@ -77,14 +79,14 @@ module ManualLocation
 
     private
 
-    def run_reader(names)
+    def run_reader(names, source:)
       # Names travel over stdin, not process arguments. stderr is discarded and
       # neither output nor native errors are sent to application logs.
       output = +''
       Open3.popen2(@executable, pgroup: true, err: File::NULL) do |stdin, stdout, wait|
         begin
           Timeout.timeout(TIMEOUT) do
-            stdin.write(JSON.generate(names: names)); stdin.close
+            stdin.write(JSON.generate(names: names, source: source)); stdin.close
             loop do
               output << stdout.readpartial(4096)
               raise SourceError, 'source_unavailable' if output.bytesize > MAX_OUTPUT
