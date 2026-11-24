@@ -554,6 +554,19 @@ class ManualLocationTest < Minitest::Test
     assert_equal 'unavailable', app.snapshot(people)[:people][0][:status]
   end
 
+  def test_last_known_retention_bounds_observation_and_successful_read_independently
+    [[NOW - 86_401, NOW], [NOW, NOW - 86_401], [NOW + 61, NOW], [NOW, NOW + 1]].each do |observed, checked|
+      source = Object.new
+      source.define_singleton_method(:refresh) do |names, source:|
+        names.to_h { |name| [name, { status: 'located', label: 'Home', observed_at: observed, checked_at: checked }] }
+      end
+      app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { NOW }, thread: ->(&block) { block.call })
+      people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
+      app.start_refresh(people)
+      assert_equal 'unavailable', app.snapshot(people)[:people][0][:status]
+    end
+  end
+
   private
 
   def request(uri, key: KEY, origin: nil, body: { people: [{ personId: PERSON, findMyName: 'Person One' }], refresh: true })
