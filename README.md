@@ -390,6 +390,16 @@ unavailable. Device support currently requires the verified legacy sidebar and
 detail-card layout; unsupported layouts fail closed. It never presses device
 actions such as Play Sound, Mark As Lost, or Erase.
 
+For supported layouts, the reader opens the verified bubble's **More Info**
+control and reads the Info panel's separate name, street address, and observation
+age fields. It closes only that read-only panel, waits for the sidebar to return,
+and verifies the selected source again. A response may include `address` alongside
+`label` when the exact identity and both observation ages agree. Generic city
+labels, missing timestamps, mismatched panels, and unsupported address formats
+never become precise addresses. Opening Info does not invoke its sharing or
+settings controls. Address data has the same private, latest-only lifetime as
+the observation and is omitted for paused, expired, or unavailable readings.
+
 Only the latest observations are held in memory. There is no location history,
 background collection timer, request log, or coordinate extraction. A displayed
 `Now` or explicit age in the sidebar supplies the observation time. `Paused` is

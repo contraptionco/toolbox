@@ -242,6 +242,69 @@ class ManualLocationTest < Minitest::Test
     assert_raises(ManualLocation::SourceError) { source.refresh(['Family phone'], source: 'unknown') }
   end
 
+  def test_precise_addresses_remain_optional_timestamped_and_bound_to_the_native_source
+    address = '12 Example Street, Sample City, NY 10000'
+    description = 'Person One, 1 km, Sample City, Now'
+    source = ManualLocation::FindMySource.new(executable: '/unused', clock: -> { NOW }, runner: ->(_names, source:) {
+      JSON.generate(rows: [{ name: 'Person One', source: 'person', description: description, address: address }])
+    })
+    assert_equal address, source.refresh(['Person One'])['Person One'][:address]
+    assert_empty source.refresh(['Person One'], source: 'device')
+    [nil, {}, 'New York, NY', 'Home', "12 Example Street,\nSample City, NY 10000", "12 #{'X' * 250} Street, Sample City, NY 10000"].each do |invalid|
+      address = invalid
+      refute source.refresh(['Person One'])['Person One'].key?(:address)
+    end
+    address = '12 Example Street, Sample City, NY 10000'
+    description = 'Person One, 1 km, Sample City, Paused'
+    refute source.refresh(['Person One'])['Person One'].key?(:address)
+    description = 'Person One, 1 km, Sample City, 3 hr. ago'
+    assert_empty source.refresh(['Person One'])
+  end
+
+  def test_http_addresses_disappear_when_observations_pause_expire_or_lose_permission
+    now = NOW
+    mode = 'located'
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      raise ManualLocation::SourceError, 'permission_required' if mode == 'denied'
+      names.to_h { |name| [name, { status: mode, label: 'Sample City', address: '12 Example Street, Sample City, NY 10000', observed_at: NOW, checked_at: now }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { now }, thread: ->(&block) { block.call })
+    people = [{ 'personId' => PERSON, 'findMyName' => 'Person One' }]
+    app.start_refresh(people)
+    assert app.snapshot(people)[:people][0].key?(:address)
+    now += 901
+    refute app.snapshot(people)[:people][0].key?(:address)
+    app.start_refresh(people)
+    assert_equal 'stale', app.snapshot(people)[:people][0][:status]
+    assert app.snapshot(people)[:people][0].key?(:address)
+    now += 21
+    mode = 'paused'
+    app.start_refresh(people)
+    refute app.snapshot(people)[:people][0].key?(:address)
+    now += 21
+    mode = 'denied'
+    app.start_refresh(people)
+    refute app.snapshot(people)[:people][0].key?(:address)
+  end
+
+  def test_full_family_address_responses_stay_under_the_private_response_limit
+    source = Object.new
+    source.define_singleton_method(:refresh) do |names, source:|
+      names.to_h { |name| [name, { status: 'located', label: '🏠' * 160, address: "12 #{'Long ' * 30}Street, Sample City, NY 10000", observed_at: NOW, checked_at: NOW }] }
+    end
+    app = ManualLocation::App.new(config: config, source: source, revision: 'fixture', clock: -> { NOW }, thread: ->(&block) { block.call })
+    people = 32.times.map { |i| { personId: format('00000000-0000-4000-8000-%012d', i), findMyName: "Person #{i}" } }
+    with_server(app) do |uri|
+      response = request(uri, body: { people: people, refresh: true })
+      assert_equal 200, response.code.to_i
+      assert_operator response.body.bytesize, :<=, 32_768
+      parsed = JSON.parse(response.body)
+      assert_equal 32, parsed['people'].length
+      assert parsed['people'].all? { |person| person['address'] && person['label'].valid_encoding? }
+    end
+  end
+
   private
 
   def request(uri, key: KEY, origin: nil, body: { people: [{ personId: PERSON, findMyName: 'Person One' }], refresh: true })

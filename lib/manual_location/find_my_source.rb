@@ -31,9 +31,11 @@ module ManualLocation
       names.to_h do |name|
         matches = rows.select { |row| row.is_a?(Hash) && row.fetch('source', 'person') == source &&
                       row['name'].is_a?(String) && row['name'].unicode_normalize(:nfc) == name.unicode_normalize(:nfc) && row['description'].is_a?(String) }
-                      .map { |row| [row['description'], row['selected'] == true] }.uniq
+                      .map { |row| [row['description'], row['selected'] == true, self.class.clean_address(row['address'])] }.uniq
         # Duplicate display names cannot be mapped safely to a family account.
-        [name, matches.length == 1 ? self.class.parse_row(name, matches.first[0], now, selected: matches.first[1]) : nil]
+        entry = matches.length == 1 ? self.class.parse_row(name, matches.first[0], now, selected: matches.first[1]) : nil
+        entry[:address] = matches.first[2] if entry && entry[:status] == 'located' && matches.first[2]
+        [name, entry]
       end.compact
     rescue JSON::ParserError, TypeError
       raise SourceError, 'source_unavailable'
@@ -75,6 +77,13 @@ module ManualLocation
       label = value.to_s.gsub(/[\x00-\x1f\x7f]/, ' ').strip[0, 160]
       return nil if label.empty? || label.match?(/\A(?:Address unavailable|Location not found|No location found|Not sharing location)\z/i)
       label
+    end
+
+    def self.clean_address(value)
+      return nil unless value.is_a?(String) && value.valid_encoding? && value.bytesize <= 240 && !value.match?(/[\p{Cc}\p{Cf}]/)
+      address = value.unicode_normalize(:nfc).gsub(/\s+/, ' ').strip
+      return nil unless address.match?(/\A\d+[A-Za-z-]*\s+[^,]*\b(?:Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Drive|Dr|Broadway|Place|Pl|Boulevard|Blvd|Way|Court|Ct|Parkway|Pkwy|Square|Sq|Terrace|Ter|Highway|Hwy)\b[^,]*,\s*[^,]+,\s*[^,]+\z/i)
+      address
     end
 
     private

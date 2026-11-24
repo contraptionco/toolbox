@@ -13,21 +13,23 @@ class ManualLocationNativeTest < Minitest::Test
     self.class.compile_reader
   end
 
-  def self.compile_reader
-    return @reader if @reader
+  def self.compile_reader(mode = 'MANUAL_LOCATION_TEST')
+    @readers ||= {}
+    return @readers[mode] if @readers[mode]
+    raise 'Unknown fixture mode.' unless %w[MANUAL_LOCATION_TEST MANUAL_LOCATION_INFO_TEST].include?(mode)
 
     source = File.expand_path('../native/find_my_reader.swift', __dir__)
     # Never run a production reader as a fixture test. The compiled test branch
     # only transforms stdin fixtures; it cannot activate Find My or inspect AX.
-    raise 'Native fixture harness is missing.' unless File.read(source).include?('#if MANUAL_LOCATION_TEST')
+    raise 'Native fixture harness is missing.' unless File.read(source).match?(/^#(?:if|elseif) #{mode}$/)
 
     directory = Dir.mktmpdir('manual-location-native-test-')
     Minitest.after_run { FileUtils.remove_entry(directory) if File.exist?(directory) }
     reader = File.join(directory, 'find-my-fixtures')
-    _stdout, stderr, status = Open3.capture3('/usr/bin/xcrun', 'swiftc', '-D', 'MANUAL_LOCATION_TEST', source, '-o', reader)
+    _stdout, stderr, status = Open3.capture3('/usr/bin/xcrun', 'swiftc', '-D', mode, source, '-o', reader)
     raise "Native fixture harness did not compile: #{stderr}" unless status.success?
 
-    @reader = reader
+    @readers[mode] = reader
   end
 
   def fixture(**changes)
@@ -124,5 +126,44 @@ class ManualLocationNativeTest < Minitest::Test
     description = canonical(fixture(description: 'Alex, Home, 3 hr. ago, 1 mi')).first
     assert_equal 'Alex, 1 mi, Home, 3 hr. ago', description
     assert_nil ManualLocation::FindMySource.parse_row('Alex', description, NOW, selected: true)
+  end
+
+  def info_fixture(**changes)
+    { name: 'Alex', header: 'Alex', address: '12 Example Street, Sample City, NY 10000',
+      sidebarAge: 'Now', detailAge: 'Now', selected: true, panelCount: 1 }.merge(changes)
+  end
+
+  def info_addresses(*fixtures)
+    stdout, stderr, status = Open3.capture3(self.class.compile_reader('MANUAL_LOCATION_INFO_TEST'), stdin_data: JSON.generate(fixtures))
+    assert status.success?, "Native Info fixture harness failed: #{stderr}"
+    result = JSON.parse(stdout)
+    assert_equal fixtures.length, result.length
+    result
+  end
+
+  def test_precise_info_address_requires_matching_identity_and_observation_age
+    values = info_addresses(
+      info_fixture,
+      info_fixture(name: 'José', header: "Jose\u0301", sidebarAge: '2 minutes ago', detailAge: '2 min. ago', address: '12 Example St, Sample City, NY  10000'),
+      info_fixture(sidebarAge: '1 hr. ago', detailAge: '60 minutes ago', address: '12 Broadway, Sample City, NY 10000')
+    )
+    assert_equal ['12 Example Street, Sample City, NY 10000', '12 Example St, Sample City, NY 10000', '12 Broadway, Sample City, NY 10000'], values
+    values.each { |value| assert_equal value, ManualLocation::FindMySource.clean_address(value) }
+  end
+
+  def test_info_never_turns_a_wrong_panel_city_eta_or_paused_read_into_precision
+    cases = [
+      info_fixture(header: 'Alex, Jr.'), info_fixture(header: 'alex'),
+      info_fixture(panelCount: 0), info_fixture(panelCount: 2), info_fixture(selected: false),
+      info_fixture(sidebarAge: '2 min. ago', detailAge: 'Now'),
+      info_fixture(sidebarAge: 'Paused', detailAge: 'Paused'),
+      info_fixture(detailAge: '39 min'), info_fixture(detailAge: 'Battery 90%'),
+      info_fixture(sidebarAge: '3 hr. ago', detailAge: '3 hours ago'),
+      info_fixture(address: 'New York, NY'), info_fixture(address: 'Home'),
+      info_fixture(address: 'Example Street, Sample City, NY 10000'),
+      info_fixture(address: "12 Example Street,\nSample City, NY 10000"),
+      info_fixture(address: "12 #{'Long ' * 60}Street, Sample City, NY 10000")
+    ]
+    info_addresses(*cases).each { |value| assert_nil value }
   end
 end

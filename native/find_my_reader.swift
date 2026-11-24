@@ -47,7 +47,50 @@ struct LegacyFindMyRow {
     }
 }
 
-#if MANUAL_LOCATION_TEST
+struct FindMyInfoAddress {
+    struct Fixture: Decodable {
+        let name: String
+        let header: String
+        let address: String
+        let sidebarAge: String
+        let detailAge: String
+        let selected: Bool
+        let panelCount: Int
+    }
+
+    static func age(_ value: String) -> Int? {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.caseInsensitiveCompare("Now") == .orderedSame { return 0 }
+        let pattern = #"\A(\d+)\s+(min(?:ute)?s?\.?|hr\.?|hours?)\s+ago\z"#
+        let expression = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        guard let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let amountRange = Range(match.range(at: 1), in: text),
+              let unitRange = Range(match.range(at: 2), in: text),
+              let amount = Int(text[amountRange]), amount <= 7200 else { return nil }
+        let seconds = amount * (text[unitRange].lowercased().hasPrefix("h") ? 3600 : 60)
+        return seconds <= 7200 ? seconds : nil
+    }
+
+    static func validated(_ fixture: Fixture) -> String? {
+        guard fixture.selected, fixture.panelCount == 1,
+              fixture.name.precomposedStringWithCanonicalMapping == fixture.header.precomposedStringWithCanonicalMapping,
+              let sidebarAge = age(fixture.sidebarAge), age(fixture.detailAge) == sidebarAge,
+              !fixture.address.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        let address = fixture.address.precomposedStringWithCanonicalMapping
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        // A city or place nickname is not a street address. Only preserve the
+        // observed numbered-street format; unsupported formats stay optional.
+        guard address.utf8.count <= 240,
+              address.range(of: #"\A\d+[A-Za-z-]*\s+[^,]*\b(?:Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Drive|Dr|Broadway|Place|Pl|Boulevard|Blvd|Way|Court|Ct|Parkway|Pkwy|Square|Sq|Terrace|Ter|Highway|Hwy)\b[^,]*,\s*[^,]+,\s*[^,]+\z"#,
+                  options: [.regularExpression, .caseInsensitive]) != nil else { return nil }
+        return address
+    }
+}
+
+#if MANUAL_LOCATION_INFO_TEST
+let fixtures = try JSONDecoder().decode([FindMyInfoAddress.Fixture].self, from: FileHandle.standardInput.readDataToEndOfFile())
+FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { FindMyInfoAddress.validated($0) }))
+#elseif MANUAL_LOCATION_TEST
 let fixtures = try JSONDecoder().decode([LegacyFindMyRow.Fixture].self, from: FileHandle.standardInput.readDataToEndOfFile())
 FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { LegacyFindMyRow.canonicalDescription(from: $0) }))
 #else
@@ -56,7 +99,7 @@ FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { LegacyFi
 // Devices sidebar rows and never reads Apple account files, caches, or the keychain.
 // The parent process enforces a second, hard wall-clock timeout.
 struct Input: Decodable { let names: [String]; let source: String? }
-struct Row: Encodable { let name: String; let description: String; let selected: Bool; let source: String }
+struct Row: Encodable { let name: String; let description: String; let selected: Bool; let source: String; var address: String? = nil }
 struct Output: Encodable { var rows: [Row] = []; var error: String? = nil }
 
 func emit(_ value: Output, code: Int32 = 0) -> Never {
@@ -80,7 +123,7 @@ guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedV
     emit(Output(error: "permission_required"), code: 77)
 }
 
-let deadline = Date().addingTimeInterval(15)
+var deadline = Date().addingTimeInterval(15)
 func runLoop(_ seconds: TimeInterval) {
     RunLoop.current.run(until: min(Date().addingTimeInterval(seconds), deadline))
 }
@@ -109,7 +152,13 @@ func string(_ element: AXUIElement, _ name: String) -> String {
     return attribute(element, name) as? String ?? ""
 }
 guard let windows = attribute(app, kAXWindowsAttribute) as? [AXUIElement],
-      windows.count == 1, let window = windows.first else { emit(Output(error: "source_unavailable"), code: 69) }
+      windows.count == 1, let initialWindow = windows.first else { emit(Output(error: "source_unavailable"), code: 69) }
+var window = initialWindow
+func refreshWindow() -> Bool {
+    guard let current = attribute(app, kAXWindowsAttribute) as? [AXUIElement], current.count == 1 else { return false }
+    window = current[0]
+    return true
+}
 func walk(_ visit: (AXUIElement) -> Void) {
     var queue: [(AXUIElement, Int)] = [(window, 0)]
     var visited: [CFHashCode: [AXUIElement]] = [:]
@@ -131,8 +180,18 @@ func walk(_ visit: (AXUIElement) -> Void) {
 // Select only the explicitly requested source tab. Legacy rows may require opening their read-only
 // detail card for exact identity; no sharing action or context menu is invoked.
 // A directions ETA in that card is never used as an observation time.
+// A previously opened read-only Info panel hides the source tabs. Dismiss only
+// a verified panel whose exact header is one of this invocation's mappings.
+var existingInfo: [InfoPanel] = []
+walk { element in
+    guard input.names.contains(where: { $0.precomposedStringWithCanonicalMapping == string(element, kAXDescriptionAttribute).precomposedStringWithCanonicalMapping }),
+          let panel = infoPanel(element) else { return }
+    if !existingInfo.contains(where: { CFEqual($0.container, panel.container) }) { existingInfo.append(panel) }
+}
+if existingInfo.count == 1 { _ = dismissInfo(existingInfo[0]); _ = refreshWindow() }
 var sourceTab: AXUIElement?
 for _ in 0..<4 {
+    _ = refreshWindow()
     walk { element in
         let role = string(element, kAXRoleAttribute)
         guard [kAXRadioButtonRole, kAXButtonRole].contains(role) else { return }
@@ -143,7 +202,8 @@ for _ in 0..<4 {
     if sourceTab != nil { break }
     runLoop(0.25)
 }
-guard let tab = sourceTab else { emit(Output(error: "source_unavailable"), code: 69) }
+guard let initialTab = sourceTab else { emit(Output(error: "source_unavailable"), code: 69) }
+var tab = initialTab
 let selected = (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue ?? false
 if !selected { _ = AXUIElementPerformAction(tab, kAXPressAction as CFString) }
 runLoop(0.5)
@@ -189,6 +249,69 @@ func isSelected(_ element: AXUIElement) -> Bool {
 func parent(_ element: AXUIElement) -> AXUIElement? {
     guard let value = attribute(element, kAXParentAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
     return unsafeBitCast(value, to: AXUIElement.self)
+}
+
+func scopedElements(_ root: AXUIElement) -> [AXUIElement]? {
+    var queue: [(AXUIElement, Int)] = [(root, 0)]
+    var visited: [CFHashCode: [AXUIElement]] = [:]
+    var result: [AXUIElement] = []
+    while !queue.isEmpty && result.count < 200 && Date() < deadline {
+        let (element, depth) = queue.removeLast()
+        let hash = CFHash(element)
+        if (visited[hash] ?? []).contains(where: { CFEqual($0, element) }) { continue }
+        visited[hash, default: []].append(element)
+        result.append(element)
+        if let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement], !children.isEmpty {
+            guard depth < 12, children.count <= 100 else { return nil }
+            queue.append(contentsOf: children.map { ($0, depth + 1) })
+        }
+    }
+    return queue.isEmpty && Date() < deadline ? result : nil
+}
+
+struct InfoPanel {
+    let header: AXUIElement
+    let container: AXUIElement
+    let name: String
+    let address: String?
+    let age: String?
+}
+
+func dismissInfo(_ panel: InfoPanel) -> Bool {
+    guard let current = infoPanel(panel.header), CFEqual(current.container, panel.container), current.name == panel.name else { return false }
+    var actions: CFArray?
+    guard AXUIElementCopyActionNames(panel.container, &actions) == .success,
+          (actions as? [String])?.contains(kAXCancelAction) == true else { return false }
+    _ = AXUIElementPerformAction(panel.container, kAXCancelAction as CFString)
+    runLoop(0.1)
+    // The caller must observe the restored source view; AX action success is
+    // not evidence that the animated popup has finished closing.
+    return true
+}
+
+func infoPanel(_ header: AXUIElement) -> InfoPanel? {
+    guard string(header, kAXRoleAttribute) == kAXStaticTextRole,
+          string(header, kAXIdentifierAttribute) == "PrimaryLabel",
+          let first = parent(header), string(first, kAXRoleAttribute) == kAXGroupRole,
+          let second = parent(first), string(second, kAXRoleAttribute) == kAXGroupRole,
+          let popover = parent(second), string(popover, kAXRoleAttribute) == "AXPopover",
+          let elements = scopedElements(popover),
+          !elements.contains(where: { [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole, kAXRadioButtonRole, kAXMenuRole].contains(string($0, kAXRoleAttribute)) }),
+          elements.contains(where: {
+              guard string($0, kAXRoleAttribute) == kAXButtonRole else { return false }
+              let description = string($0, kAXDescriptionAttribute)
+              return description == "Directions" || description.hasPrefix("Directions,")
+          }) else { return nil }
+    func fields(_ identifier: String) -> [AXUIElement] {
+        elements.filter { string($0, kAXRoleAttribute) == kAXStaticTextRole && string($0, kAXIdentifierAttribute) == identifier }
+    }
+    let primary = fields("PrimaryLabel")
+    let secondary = fields("SecondaryLabel")
+    let tertiary = fields("TertiaryLabel")
+    guard primary.count == 1, CFEqual(primary[0], header), secondary.count <= 1, tertiary.count <= 1 else { return nil }
+    return InfoPanel(header: header, container: popover, name: string(header, kAXDescriptionAttribute).precomposedStringWithCanonicalMapping,
+        address: secondary.first.map { string($0, kAXDescriptionAttribute) },
+        age: tertiary.first.map { string($0, kAXDescriptionAttribute) })
 }
 
 func legacyListContainer(_ element: AXUIElement) -> AXUIElement? {
@@ -246,10 +369,80 @@ func exactDetailHeaders(_ name: String) -> [AXUIElement] {
               string(element, kAXDescriptionAttribute).precomposedStringWithCanonicalMapping == normalized,
               let labels = attribute(element, "AXUserInputLabels") as? [String],
               labels.contains(where: { $0.precomposedStringWithCanonicalMapping == normalized }),
-              hasLegacyDetailContainer(element) else { return }
+              (hasLegacyDetailContainer(element) || infoPanel(element) != nil) else { return }
         headers.append(element)
     }
     return headers
+}
+
+func expandInfo(_ name: String, selectedRow: AXUIElement) -> InfoPanel? {
+    let headers = exactDetailHeaders(name)
+    guard headers.count == 1, legacyRowIsSelected(selectedRow) else { return nil }
+    if let existing = infoPanel(headers[0]) { return existing }
+    guard let card = parent(headers[0]), let children = attribute(card, kAXChildrenAttribute) as? [AXUIElement], children.count <= 100 else { return nil }
+    // More Info is a direct sibling of the verified bubble title. Do not
+    // descend into the surrounding map or pick a control by screen position.
+    var controls: [AXUIElement] = []
+    for child in children where string(child, kAXRoleAttribute) == kAXButtonRole && string(child, kAXDescriptionAttribute) == "More Info" {
+        if !controls.contains(where: { CFEqual($0, child) }) { controls.append(child) }
+    }
+    guard controls.count == 1, exactDetailHeaders(name).count == 1, legacyRowIsSelected(selectedRow) else { return nil }
+    var actions: CFArray?
+    guard AXUIElementCopyActionNames(controls[0], &actions) == .success,
+          (actions as? [String])?.contains(kAXPressAction) == true else { return nil }
+    // This only opens the selected source's read-only information. Never press
+    // a setting, sharing control, directions action, or device command.
+    _ = AXUIElementPerformAction(controls[0], kAXPressAction as CFString)
+    let settle = min(Date().addingTimeInterval(1.5), deadline)
+    while Date() < settle {
+        if !refreshWindow() { runLoop(0.1); continue }
+        let current = exactDetailHeaders(name)
+        if current.count == 1, let panel = infoPanel(current[0]) { return panel }
+        runLoop(0.1)
+    }
+    return nil
+}
+
+func readAndCloseInfo(_ name: String, selectedRow: AXUIElement) -> InfoPanel? {
+    // Leave enough time to close the modal read-only view and revalidate its
+    // sidebar selection. Source reads must never depend on a hidden old tree.
+    guard Date() < deadline.addingTimeInterval(-5) else { return nil }
+    let hardDeadline = deadline
+    deadline = hardDeadline.addingTimeInterval(-3)
+    let captured = expandInfo(name, selectedRow: selectedRow)
+    let same = captured.flatMap { infoPanel($0.header) }
+    let stable = captured.flatMap { panel in
+        same.map { CFEqual($0.container, panel.container) && $0.name == panel.name && $0.address == panel.address && $0.age == panel.age }
+    } == true
+    // Address discovery has a shorter budget than cleanup. Restore the hard
+    // deadline even when parsing failed, then close a verified mapped panel.
+    deadline = hardDeadline
+    var cleanup = captured
+    if cleanup == nil, refreshWindow() {
+        let current = exactDetailHeaders(name)
+        if current.count == 1 { cleanup = infoPanel(current[0]) }
+    }
+    guard let panel = cleanup, panel.name == name.precomposedStringWithCanonicalMapping else { return nil }
+    guard dismissInfo(panel) else { return nil }
+    // The popup temporarily replaces the accessible window/tab handles.
+    let settle = min(Date().addingTimeInterval(1.5), deadline)
+    var restoredTab: AXUIElement?
+    while Date() < settle {
+        if !refreshWindow() { runLoop(0.1); continue }
+        var restoredTabs: [AXUIElement] = []
+        walk { element in
+            if [kAXRadioButtonRole, kAXButtonRole].contains(string(element, kAXRoleAttribute)),
+               string(element, kAXDescriptionAttribute) == tabName { restoredTabs.append(element) }
+        }
+        if restoredTabs.count == 1, (attribute(restoredTabs[0], kAXValueAttribute) as? NSNumber)?.boolValue == true {
+            restoredTab = restoredTabs[0]
+            break
+        }
+        runLoop(0.1)
+    }
+    guard let restoredTab else { return nil }
+    tab = restoredTab
+    return stable ? panel : nil
 }
 
 func legacyCandidates(_ name: String) -> [AXUIElement] {
@@ -302,14 +495,35 @@ func readLegacyRow(_ name: String) -> Row? {
     let current = legacyCandidates(name)
     guard current.count == 1, CFEqual(current[0], verified), legacyRowIsSelected(verified),
           exactDetailHeaders(name).count == 1 else { return nil }
-    let description = string(verified, kAXDescriptionAttribute)
+    let capturedInfo = readAndCloseInfo(name, selectedRow: verified)
+    runLoop(0.15)
+    // Expanding Info can replace accessibility handles. Establish the current
+    // unique selected row and its exact header again before reading any fields.
+    let finalRows = legacyCandidates(name)
+    let finalHeaders = exactDetailHeaders(name)
+    guard finalRows.count == 1, finalHeaders.count == 1, legacyRowIsSelected(finalRows[0]) else { return nil }
+    let finalRow = finalRows[0]
+    let description = string(finalRow, kAXDescriptionAttribute)
     let fixture = LegacyFindMyRow.Fixture(name: name, description: description,
-        detailName: name, candidateCount: current.count, selected: legacyRowIsSelected(verified),
+        detailName: name, candidateCount: finalRows.count, selected: legacyRowIsSelected(finalRow),
         wasSelected: wasSelected, hadMatchingHeader: hadMatchingHeader)
-    guard let canonical = LegacyFindMyRow.canonicalDescription(from: fixture),
-          legacyRowIsSelected(verified), exactDetailHeaders(name).count == 1,
+    guard let canonical = LegacyFindMyRow.canonicalDescription(from: fixture) else { return nil }
+    var address: String?
+    if let panel = capturedInfo, let value = panel.address, let age = panel.age,
+       let match = LegacyFindMyRow.suffix.firstMatch(in: description, range: NSRange(description.startIndex..., in: description)),
+       let ageRange = Range(match.range(at: 1), in: description) {
+        address = FindMyInfoAddress.validated(.init(name: name,
+            header: panel.name, address: value,
+            sidebarAge: String(description[ageRange]), detailAge: age,
+            selected: legacyRowIsSelected(finalRow), panelCount: finalHeaders.count))
+    }
+    let checkedRows = legacyCandidates(name)
+    let checkedHeaders = exactDetailHeaders(name)
+    guard checkedRows.count == 1, CFEqual(checkedRows[0], finalRow), legacyRowIsSelected(finalRow),
+          string(finalRow, kAXDescriptionAttribute) == description,
+          checkedHeaders.count == 1, CFEqual(checkedHeaders[0], finalHeaders[0]),
           (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { return nil }
-    return Row(name: name, description: canonical, selected: false, source: sourceKind)
+    return Row(name: name, description: canonical, selected: false, source: sourceKind, address: address)
 }
 
 var rows = readRows()

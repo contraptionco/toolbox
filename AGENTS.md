@@ -114,6 +114,11 @@ LaunchAgent state, which can contain secrets.
   A candidate-name prefix is not identity;
   legacy rows also require an exact detail header and current row selection.
   Keep native execution and HTTP requests bounded.
+- The optional precise address comes only from the mapped source's read-only
+  More Info panel. Verify its exact name and explicit observation age, close the
+  panel with its advertised cancel action, then recheck the restored sidebar's
+  selection and matching age. Do not use city labels, directions text, or stale
+  panels as precise-address evidence, or invoke Info settings and sharing actions.
 - Accessibility approval covers the reader and its responsible Ruby parent.
   Read the interpreter path from the installed helper LaunchAgent's first
   `ProgramArguments` entry; do not assume a fixed Ruby version or grant unrelated
