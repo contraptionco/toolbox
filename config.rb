@@ -232,7 +232,9 @@ module Config
             # Keep credentials in the 1Password ENV field, supplied at runtime.
             environment: {
               AWAIR_LOCAL_URL: 'http://awair-elem-1425e2.local',
-              AWAIR_DEVICE_MAC: '70:88:6B:14:25:E2'
+              AWAIR_DEVICE_MAC: '70:88:6B:14:25:E2',
+              HUE_BRIDGE_URL: 'https://0017886136a4.local',
+              HUE_BRIDGE_ID: '001788FFFE6136A4'
             },
             logging: { driver: 'local', options: { 'max-size' => '10m', 'max-file' => '3' } }
           }

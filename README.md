@@ -288,6 +288,31 @@ key, new port mapping, or firewall rule is required. Changing these settings in
 wait for health before recording the deployment. Other credentials stay in
 1Password.
 
+#### Hue Bridge
+
+Manual's `app.environment` override in `config.rb` supplies these nonsecret
+settings for the local Hue Bridge:
+
+```text
+HUE_BRIDGE_URL=https://0017886136a4.local
+HUE_BRIDGE_ID=001788FFFE6136A4
+```
+
+Keep `HUE_APPLICATION_KEY` only in the `manual` 1Password item's multiline `ENV`
+field. Pair a dedicated application key through the Bridge's physical link
+button; never commit the key or put it in Docker build arguments. The address
+and identity above take precedence over `ENV`. Manual must verify HTTPS against
+the Hue CA and the exact Bridge identity. The integration reads light status;
+these settings do not authorize changing lights or HomeKit pairing.
+
+After an authorized key update, Toolbox's one-hour 1Password cache may delay
+activation. An authorized operator can refresh only `manual` / `ENV` through
+`Core::OnePassword.get_item` with `TOOLBOX_OP_REFRESH=1` in the existing production
+service-account environment. Never print the returned field. The next normal
+heartbeat detects the changed dotenv bytes, recreates Manual's containers, and
+waits for health even if the application commit has not changed. Do not edit the
+generated `.env` or disable the cache globally.
+
 #### Find My locations
 
 Manual can read explicitly mapped family locations from Find My on the Mac. The
