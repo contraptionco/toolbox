@@ -16,7 +16,7 @@ class ManualLocationNativeTest < Minitest::Test
   def self.compile_reader(mode = 'MANUAL_LOCATION_TEST')
     @readers ||= {}
     return @readers[mode] if @readers[mode]
-    raise 'Unknown fixture mode.' unless %w[MANUAL_LOCATION_TEST MANUAL_LOCATION_INFO_TEST].include?(mode)
+    raise 'Unknown fixture mode.' unless %w[MANUAL_LOCATION_TEST MANUAL_LOCATION_INFO_TEST MANUAL_LOCATION_DEVICE_TEST].include?(mode)
 
     source = File.expand_path('../native/find_my_reader.swift', __dir__)
     # Never run a production reader as a fixture test. The compiled test branch
@@ -165,5 +165,26 @@ class ManualLocationNativeTest < Minitest::Test
       info_fixture(address: "12 #{'Long ' * 60}Street, Sample City, NY 10000")
     ]
     info_addresses(*cases).each { |value| assert_nil value }
+  end
+
+  def test_device_distance_can_be_absent_without_relaxing_identity_or_freshness
+    cases = [
+      fixture(description: 'Alex, Home, Now'),
+      fixture(description: 'Alex, Home, 2 min. ago'),
+      fixture(description: 'Alex, Home, Paused'),
+      fixture(description: 'Alex, Jr., Home, Now', detailName: 'Alex, Jr.'),
+      fixture(description: 'Alex, Home, 39 min'),
+      fixture(description: 'Alex, Home, Now', candidateCount: 2),
+      fixture(description: 'Alex, Home, Now', selected: false),
+      fixture(description: 'Alex, Home, Now', hadMatchingHeader: true, wasSelected: false)
+    ]
+    stdout, stderr, status = Open3.capture3(self.class.compile_reader('MANUAL_LOCATION_DEVICE_TEST'), stdin_data: JSON.generate(cases))
+    assert status.success?, stderr
+    values = JSON.parse(stdout)
+    assert_equal [{ 'label' => 'Home', 'age' => 'Now' }, { 'label' => 'Home', 'age' => '2 min. ago' }, { 'label' => 'Home', 'age' => 'Paused' }], values.first(3)
+    values.drop(3).each { |value| assert_nil value }
+    assert_equal NOW - 120, ManualLocation::FindMySource.parse_observation(values[1]['label'], values[1]['age'], NOW)[:observed_at]
+    assert_nil ManualLocation::FindMySource.parse_observation('Home', '39 min', NOW)
+    assert_nil ManualLocation::FindMySource.parse_observation('Home', '3 hr. ago', NOW)
   end
 end

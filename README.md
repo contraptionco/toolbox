@@ -375,6 +375,9 @@ original People mapping. Use the exact displayed device name for a phone that
 supplies someone's own location. `Me` without an observation time is not a
 substitute. Responses retain `source: "find-my"` and include `findMySource` so
 Manual can distinguish a device observation from a People observation.
+Devices may omit distance while still reporting a location and explicit age.
+That verified device layout uses separate label/age fields internally; the
+reader does not invent a zero distance or weaken People name matching.
 
 Refresh runs asynchronously and may activate Find My or select its People or
 Devices tab. Mixed requests read those tabs sequentially, with a separate bounded

@@ -261,6 +261,24 @@ class ManualLocationTest < Minitest::Test
     assert_empty source.refresh(['Person One'])
   end
 
+  def test_structured_distance_free_observations_are_device_only
+    age = 'Now'
+    source = ManualLocation::FindMySource.new(executable: '/unused', clock: -> { NOW }, runner: ->(_names, source:) {
+      JSON.generate(rows: [{ name: 'Family phone', source: source, description: 'Family phone, Home, Now', label: 'Home', observationAge: age,
+        address: '12 Example Street, Sample City, NY 10000' }])
+    })
+    assert_empty source.refresh(['Family phone'], source: 'person')
+    observation = source.refresh(['Family phone'], source: 'device')['Family phone']
+    assert_equal NOW, observation[:observed_at]
+    assert observation.key?(:address)
+    age = '39 min'
+    assert_empty source.refresh(['Family phone'], source: 'device')
+    age = 'Paused'
+    observation = source.refresh(['Family phone'], source: 'device')['Family phone']
+    assert_equal 'paused', observation[:status]
+    refute observation.key?(:address)
+  end
+
   def test_http_addresses_disappear_when_observations_pause_expire_or_lose_permission
     now = NOW
     mode = 'located'

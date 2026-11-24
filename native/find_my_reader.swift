@@ -47,6 +47,38 @@ struct LegacyFindMyRow {
     }
 }
 
+// Devices can omit their distance while still showing a location and age.
+// Identity still comes from the independently verified selected detail header;
+// no zero distance or person-name boundary is inferred from the combined text.
+struct FindMyDeviceObservation: Encodable {
+    let label: String
+    let age: String
+    static let suffix = try! NSRegularExpression(
+        pattern: #",\s*(Now|\d+\s+(?:min(?:ute)?s?\.?|hr\.?|hours?)\s+ago|Paused)\z"#,
+        options: [.caseInsensitive])
+
+    static func isCandidate(name: String, description: String) -> Bool {
+        let text = description.precomposedStringWithCanonicalMapping
+        return text.count <= 2048 && text.hasPrefix(name.precomposedStringWithCanonicalMapping + ",") &&
+            suffix.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    static func validated(_ fixture: LegacyFindMyRow.Fixture) -> FindMyDeviceObservation? {
+        let name = fixture.name.precomposedStringWithCanonicalMapping
+        let text = fixture.description.precomposedStringWithCanonicalMapping
+        guard fixture.candidateCount == 1, fixture.selected,
+              fixture.detailName?.precomposedStringWithCanonicalMapping == name,
+              !(fixture.hadMatchingHeader && !fixture.wasSelected),
+              isCandidate(name: name, description: text),
+              let match = suffix.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let boundary = Range(match.range, in: text), let age = Range(match.range(at: 1), in: text) else { return nil }
+        let start = text.index(text.startIndex, offsetBy: name.count + 1)
+        guard start < boundary.lowerBound else { return nil }
+        let label = text[start..<boundary.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        return label.isEmpty ? nil : .init(label: label, age: String(text[age]))
+    }
+}
+
 struct FindMyInfoAddress {
     struct Fixture: Decodable {
         let name: String
@@ -87,7 +119,10 @@ struct FindMyInfoAddress {
     }
 }
 
-#if MANUAL_LOCATION_INFO_TEST
+#if MANUAL_LOCATION_DEVICE_TEST
+let fixtures = try JSONDecoder().decode([LegacyFindMyRow.Fixture].self, from: FileHandle.standardInput.readDataToEndOfFile())
+FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { FindMyDeviceObservation.validated($0) }))
+#elseif MANUAL_LOCATION_INFO_TEST
 let fixtures = try JSONDecoder().decode([FindMyInfoAddress.Fixture].self, from: FileHandle.standardInput.readDataToEndOfFile())
 FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { FindMyInfoAddress.validated($0) }))
 #elseif MANUAL_LOCATION_TEST
@@ -99,7 +134,10 @@ FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { LegacyFi
 // Devices sidebar rows and never reads Apple account files, caches, or the keychain.
 // The parent process enforces a second, hard wall-clock timeout.
 struct Input: Decodable { let names: [String]; let source: String? }
-struct Row: Encodable { let name: String; let description: String; let selected: Bool; let source: String; var address: String? = nil }
+struct Row: Encodable {
+    let name: String; let description: String; let selected: Bool; let source: String
+    var address: String? = nil; var label: String? = nil; var observationAge: String? = nil
+}
 struct Output: Encodable { var rows: [Row] = []; var error: String? = nil }
 
 func emit(_ value: Output, code: Int32 = 0) -> Never {
@@ -451,7 +489,8 @@ func legacyCandidates(_ name: String) -> [AXUIElement] {
         guard string(element, kAXRoleAttribute) == kAXStaticTextRole,
               !string(element, kAXIdentifierAttribute).hasPrefix("ListEntityRow"),
               legacyListContainer(element) != nil,
-              LegacyFindMyRow.isCandidate(name: name, description: string(element, kAXDescriptionAttribute)) else { return }
+              (LegacyFindMyRow.isCandidate(name: name, description: string(element, kAXDescriptionAttribute)) ||
+               (sourceKind == "device" && FindMyDeviceObservation.isCandidate(name: name, description: string(element, kAXDescriptionAttribute)))) else { return }
         candidates.append(element)
     }
     return candidates
@@ -507,10 +546,13 @@ func readLegacyRow(_ name: String) -> Row? {
     let fixture = LegacyFindMyRow.Fixture(name: name, description: description,
         detailName: name, candidateCount: finalRows.count, selected: legacyRowIsSelected(finalRow),
         wasSelected: wasSelected, hadMatchingHeader: hadMatchingHeader)
-    guard let canonical = LegacyFindMyRow.canonicalDescription(from: fixture) else { return nil }
+    let canonical = LegacyFindMyRow.canonicalDescription(from: fixture)
+    let device = sourceKind == "device" && canonical == nil ? FindMyDeviceObservation.validated(fixture) : nil
+    guard canonical != nil || device != nil else { return nil }
     var address: String?
+    let ageExpression = device != nil ? FindMyDeviceObservation.suffix : LegacyFindMyRow.suffix
     if let panel = capturedInfo, let value = panel.address, let age = panel.age,
-       let match = LegacyFindMyRow.suffix.firstMatch(in: description, range: NSRange(description.startIndex..., in: description)),
+       let match = ageExpression.firstMatch(in: description, range: NSRange(description.startIndex..., in: description)),
        let ageRange = Range(match.range(at: 1), in: description) {
         address = FindMyInfoAddress.validated(.init(name: name,
             header: panel.name, address: value,
@@ -523,7 +565,8 @@ func readLegacyRow(_ name: String) -> Row? {
           string(finalRow, kAXDescriptionAttribute) == description,
           checkedHeaders.count == 1, CFEqual(checkedHeaders[0], finalHeaders[0]),
           (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { return nil }
-    return Row(name: name, description: canonical, selected: false, source: sourceKind, address: address)
+    return Row(name: name, description: canonical ?? description, selected: false, source: sourceKind,
+        address: address, label: device?.label, observationAge: device?.age)
 }
 
 var rows = readRows()
