@@ -52,11 +52,11 @@ let fixtures = try JSONDecoder().decode([LegacyFindMyRow.Fixture].self, from: Fi
 FileHandle.standardOutput.write(try JSONEncoder().encode(fixtures.map { LegacyFindMyRow.canonicalDescription(from: $0) }))
 #else
 
-// Small, purpose-specific Accessibility client. It reads only mapped People
-// sidebar rows and never reads Apple account files, caches, or the keychain.
+// Small, purpose-specific Accessibility client. It reads only mapped People or
+// Devices sidebar rows and never reads Apple account files, caches, or the keychain.
 // The parent process enforces a second, hard wall-clock timeout.
-struct Input: Decodable { let names: [String] }
-struct Row: Encodable { let name: String; let description: String; let selected: Bool }
+struct Input: Decodable { let names: [String]; let source: String? }
+struct Row: Encodable { let name: String; let description: String; let selected: Bool; let source: String }
 struct Output: Encodable { var rows: [Row] = []; var error: String? = nil }
 
 func emit(_ value: Output, code: Int32 = 0) -> Never {
@@ -70,9 +70,12 @@ let inputBytes = FileHandle.standardInput.readDataToEndOfFile()
 guard inputBytes.count <= 32768,
       let input = try? JSONDecoder().decode(Input.self, from: inputBytes),
       (1...32).contains(input.names.count),
-      input.names.allSatisfy({ !$0.isEmpty && $0.count <= 200 && !$0.contains("\n") }) else {
+      input.names.allSatisfy({ !$0.isEmpty && $0.count <= 200 && !$0.contains("\n") }),
+      input.source == nil || ["person", "device"].contains(input.source!) else {
     emit(Output(error: "invalid_request"), code: 64)
 }
+let sourceKind = input.source ?? "person"
+let tabName = sourceKind == "device" ? "Devices" : "People"
 guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary) else {
     emit(Output(error: "permission_required"), code: 77)
 }
@@ -125,22 +128,22 @@ func walk(_ visit: (AXUIElement) -> Void) {
     }
 }
 
-// Select the People tab. Legacy rows may also require opening their read-only
+// Select only the explicitly requested source tab. Legacy rows may require opening their read-only
 // detail card for exact identity; no sharing action or context menu is invoked.
 // A directions ETA in that card is never used as an observation time.
-var peopleTab: AXUIElement?
+var sourceTab: AXUIElement?
 for _ in 0..<4 {
     walk { element in
         let role = string(element, kAXRoleAttribute)
         guard [kAXRadioButtonRole, kAXButtonRole].contains(role) else { return }
-        if string(element, kAXDescriptionAttribute) == "People" || string(element, kAXTitleAttribute) == "People" {
-            peopleTab = element
+        if string(element, kAXDescriptionAttribute) == tabName || string(element, kAXTitleAttribute) == tabName {
+            sourceTab = element
         }
     }
-    if peopleTab != nil { break }
+    if sourceTab != nil { break }
     runLoop(0.25)
 }
-guard let tab = peopleTab else { emit(Output(error: "source_unavailable"), code: 69) }
+guard let tab = sourceTab else { emit(Output(error: "source_unavailable"), code: 69) }
 let selected = (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue ?? false
 if !selected { _ = AXUIElementPerformAction(tab, kAXPressAction as CFString) }
 runLoop(0.5)
@@ -148,6 +151,9 @@ guard (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else {
 
 let distanceField = try! NSRegularExpression(pattern: #",\s*(?:[<>≈]\s*)?\d+(?:[.,]\d+)?\s*(?:km|m|mi|ft)(?=,)"#, options: [.caseInsensitive])
 func readRows() -> [Row] {
+    // Only the observed legacy device layout below is supported. Do not infer a
+    // newer Devices layout from a visually similar People row.
+    guard sourceKind == "person", (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { return [] }
     var found: [Row] = []
     var seen = Set<String>()
     walk { element in
@@ -170,7 +176,7 @@ func readRows() -> [Row] {
             let normalized = name.precomposedStringWithCanonicalMapping
             guard completeName == normalized else { continue }
             let key = normalized + "\u{0}" + description
-            if seen.insert(key).inserted { found.append(Row(name: name, description: description, selected: selected ?? false)) }
+            if seen.insert(key).inserted { found.append(Row(name: name, description: description, selected: selected ?? false, source: sourceKind)) }
         }
     }
     return found
@@ -188,7 +194,7 @@ func parent(_ element: AXUIElement) -> AXUIElement? {
 func legacyListContainer(_ element: AXUIElement) -> AXUIElement? {
     guard let row = parent(element), string(row, kAXRoleAttribute) == kAXGroupRole,
           let list = parent(row), string(list, kAXRoleAttribute) == kAXGroupRole else { return nil }
-    // The People list advertises this attribute but returns no value while
+    // The People and Devices lists advertise this attribute but return no value while
     // nothing is selected. Discover its supported structure before selection;
     // require the actual selected-child relationship when verifying identity.
     var names: CFArray?
@@ -210,8 +216,8 @@ func legacyRowIsSelected(_ element: AXUIElement) -> Bool {
 
 func hasLegacyDetailContainer(_ element: AXUIElement) -> Bool {
     guard let container = parent(element), string(container, kAXRoleAttribute) == kAXGroupRole else { return false }
-    // Observed legacy detail cards group the title with action buttons and a
-    // contact link. Sidebar rows and map labels do not have this structure.
+    // Observed legacy People and Devices detail cards group the title with
+    // action buttons and a link. Sidebar rows and map labels lack this structure.
     // Do not walk upward into the whole window and accept an unrelated label.
     var queue: [(AXUIElement, Int)] = [(container, 0)]
     var buttons = 0
@@ -259,6 +265,7 @@ func legacyCandidates(_ name: String) -> [AXUIElement] {
 }
 
 func readLegacyRow(_ name: String) -> Row? {
+    guard (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { return nil }
     let candidates = legacyCandidates(name)
     guard candidates.count == 1, let candidate = candidates.first else { return nil }
     let wasSelected = legacyRowIsSelected(candidate)
@@ -300,8 +307,9 @@ func readLegacyRow(_ name: String) -> Row? {
         detailName: name, candidateCount: current.count, selected: legacyRowIsSelected(verified),
         wasSelected: wasSelected, hadMatchingHeader: hadMatchingHeader)
     guard let canonical = LegacyFindMyRow.canonicalDescription(from: fixture),
-          legacyRowIsSelected(verified), exactDetailHeaders(name).count == 1 else { return nil }
-    return Row(name: name, description: canonical, selected: false)
+          legacyRowIsSelected(verified), exactDetailHeaders(name).count == 1,
+          (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { return nil }
+    return Row(name: name, description: canonical, selected: false, source: sourceKind)
 }
 
 var rows = readRows()
@@ -314,6 +322,6 @@ for name in input.names where !rows.contains(where: { $0.name == name }) && Date
     if let row = readLegacyRow(name) { rows.append(row) }
 }
 // A failed activation must not relabel an old Accessibility tree as refreshed.
-guard process.isActive else { emit(Output(error: "source_unavailable"), code: 69) }
+guard process.isActive, (attribute(tab, kAXValueAttribute) as? NSNumber)?.boolValue == true else { emit(Output(error: "source_unavailable"), code: 69) }
 emit(Output(rows: rows))
 #endif
