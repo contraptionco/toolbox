@@ -185,9 +185,20 @@ func parent(_ element: AXUIElement) -> AXUIElement? {
     return unsafeBitCast(value, to: AXUIElement.self)
 }
 
-func legacyListSelection(_ element: AXUIElement) -> [AXUIElement]? {
+func legacyListContainer(_ element: AXUIElement) -> AXUIElement? {
     guard let row = parent(element), string(row, kAXRoleAttribute) == kAXGroupRole,
           let list = parent(row), string(list, kAXRoleAttribute) == kAXGroupRole else { return nil }
+    // The People list advertises this attribute but returns no value while
+    // nothing is selected. Discover its supported structure before selection;
+    // require the actual selected-child relationship when verifying identity.
+    var names: CFArray?
+    guard AXUIElementCopyAttributeNames(list, &names) == .success,
+          (names as? [String])?.contains(kAXSelectedChildrenAttribute) == true else { return nil }
+    return list
+}
+
+func legacyListSelection(_ element: AXUIElement) -> [AXUIElement]? {
+    guard let list = legacyListContainer(element) else { return nil }
     return attribute(list, kAXSelectedChildrenAttribute) as? [AXUIElement]
 }
 
@@ -240,7 +251,7 @@ func legacyCandidates(_ name: String) -> [AXUIElement] {
     walk { element in
         guard string(element, kAXRoleAttribute) == kAXStaticTextRole,
               !string(element, kAXIdentifierAttribute).hasPrefix("ListEntityRow"),
-              legacyListSelection(element) != nil,
+              legacyListContainer(element) != nil,
               LegacyFindMyRow.isCandidate(name: name, description: string(element, kAXDescriptionAttribute)) else { return }
         candidates.append(element)
     }
@@ -265,23 +276,31 @@ func readLegacyRow(_ name: String) -> Row? {
         _ = AXUIElementPerformAction(candidate, kAXPressAction as CFString)
     }
     let settle = min(Date().addingTimeInterval(2), deadline)
+    var selectedCandidate: AXUIElement?
     while Date() < settle {
-        if legacyRowIsSelected(candidate) && exactDetailHeaders(name).count == 1 { break }
+        // Selecting a row can replace its Accessibility element. Discover the
+        // current unique row, then prove its list selection and exact card name;
+        // do not wait on a stale pre-selection handle.
+        let fresh = legacyCandidates(name)
+        if fresh.count == 1, legacyRowIsSelected(fresh[0]), exactDetailHeaders(name).count == 1 {
+            selectedCandidate = fresh[0]
+            break
+        }
         runLoop(0.15)
     }
-    guard Date() < deadline, legacyRowIsSelected(candidate), exactDetailHeaders(name).count == 1 else { return nil }
+    guard Date() < deadline, let verified = selectedCandidate else { return nil }
     runLoop(0.25)
     // Re-read the selected row after the detail transition. Confirm that the
     // same candidate is still unique and selected and the header remains exact.
     let current = legacyCandidates(name)
-    guard current.count == 1, CFEqual(current[0], candidate), legacyRowIsSelected(candidate),
+    guard current.count == 1, CFEqual(current[0], verified), legacyRowIsSelected(verified),
           exactDetailHeaders(name).count == 1 else { return nil }
-    let description = string(candidate, kAXDescriptionAttribute)
+    let description = string(verified, kAXDescriptionAttribute)
     let fixture = LegacyFindMyRow.Fixture(name: name, description: description,
-        detailName: name, candidateCount: current.count, selected: legacyRowIsSelected(candidate),
+        detailName: name, candidateCount: current.count, selected: legacyRowIsSelected(verified),
         wasSelected: wasSelected, hadMatchingHeader: hadMatchingHeader)
     guard let canonical = LegacyFindMyRow.canonicalDescription(from: fixture),
-          legacyRowIsSelected(candidate), exactDetailHeaders(name).count == 1 else { return nil }
+          legacyRowIsSelected(verified), exactDetailHeaders(name).count == 1 else { return nil }
     return Row(name: name, description: canonical, selected: false)
 }
 
