@@ -7,6 +7,7 @@ require_relative 'one_password'
 require_relative 'script_runner'
 require_relative 'system_service'
 require_relative 'dashboard_service'
+require_relative 'manual_location_service'
 require_relative 'telemetry'
 require_relative 'tunnel_service'
 require_relative 'uptime_robot'
@@ -81,6 +82,14 @@ module Core
       [{ component: 'dashboard', error: e }]
     end
 
+    def self.start_manual_location
+      Core::ManualLocationService.ensure_running
+      []
+    rescue StandardError => e
+      puts 'Location bridge startup failed; continuing application checks.'
+      [{ component: 'manual-location', error: e }]
+    end
+
     def self.handle_tunnel(code_changed)
       Core::TunnelService.ensure_tunnel_running(Config::TUNNEL_CONFIG, code_changed)
     end
@@ -138,6 +147,7 @@ module Core
       handle_tunnel(code_changed)
       start_system_services
       failures.concat(start_dashboard)
+      failures.concat(start_manual_location)
       start_docker_services
 
       # Backups are configured with Postgres first and run before deployments.
