@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    # Keep the native Swift checks on macOS without the ARM runner capacity queue.
+    # Match the production host while avoiding the ARM runner capacity queue.
     runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v4
@@ -19,5 +19,3 @@ jobs:
         run: bundle exec ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
       - name: Check heartbeat syntax
         run: zsh -n heartbeat.sh
-      - name: Check native Find My helper
-        run: xcrun swiftc -typecheck native/find_my_reader.swift

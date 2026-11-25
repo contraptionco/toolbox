@@ -96,51 +96,17 @@ LaunchAgent state, which can contain secrets.
   after testing. Match Bully Pulpit's typography, warm colors and square controls.
   Reuse the README's `assets/toolbox.svg` logo rather than inventing a wordmark.
 
-## Manual location bridge
+## Retired Manual location bridge
 
-- Keep Manual in Docker. The optional native Find My reader runs through its own
-  `co.contraption.toolbox.manual-location` LaunchAgent on **127.0.0.1:4180**.
-  Do not expose it through Cloudflare or expand the read-only dashboard API.
-- A private mode-0600 `.runtime/manual-location/config.json` contains only its
-  narrow shared key. Profile mappings arrive from Manual in authenticated
-  server-to-server requests. Never put names, locations, or credentials in logs,
-  process arguments, LaunchAgent environment variables, or Git.
-- Read only explicitly mapped People or Devices rows through macOS Accessibility. Do not
-  extract Apple credentials, decrypt caches, change sharing, or bypass macOS
-  permissions. Refresh may open Find My, select the explicitly requested source
-  tab, and open a mapped person's or device's read-only detail card to verify its
-  exact name. Keep source and name together in every cache and refresh identity.
-  Never invoke sharing, Play Sound, Lost Mode, erase, or context-menu actions.
-  A candidate-name prefix is not identity;
-  legacy rows also require an exact detail header and current row selection.
-  Keep native execution and HTTP requests bounded.
-- The optional precise address comes only from the mapped source's read-only
-  More Info panel. Verify its exact name and explicit observation age, close the
-  panel with its advertised cancel action, then recheck the restored sidebar's
-  selection and matching age. Do not use city labels, directions text, or stale
-  panels as precise-address evidence, or invoke Info settings and sharing actions.
-- Accessibility approval covers the reader and its responsible Ruby parent.
-  Read the interpreter path from the installed helper LaunchAgent's first
-  `ProgramArguments` entry; do not assume a fixed Ruby version or grant unrelated
-  interpreters. A healthy helper and an enabled reader entry alone do not prove
-  the parent's permission. Use System Settings, never TCC database edits.
-- Preserve freshness: a directions ETA is not a location observation time.
-  A device battery or connection status is not a location timestamp. Do not infer
-  a timestamp for Me; use an explicitly mapped device with its own observation.
-  Paused has no trustworthy time and must never appear current. Ambiguous or
-  unsupported rows cannot create a new observation. A transient reader failure
-  may retain a previously verified observation as stale for at most 24 hours from
-  its original observation and successful read; never advance either timestamp.
-  Detect a locked session before activating Find My and report `source_locked`.
-  Do not change lock settings or decrypt Apple caches. Permission denial must purge it. Keep one
-  serialized refresh worker, coalesce in-flight mappings, and measure the
-  completion cooldown with a monotonic clock. Keep latest observations only in
-  memory, without location history or scheduled collection. Preserve that cache
-  across unrelated Toolbox commits; helper code, dependency, interpreter, runtime
-  path, or credential changes must still restart the service.
-- Keep helper failures isolated from application checks. A successful health
-  response proves process readiness, not Accessibility permission or a live
-  location. Tests use synthetic rows, fixture checkouts, and mocked launchctl.
+- Find My integration is retired. Do not recreate its native reader, service,
+  configuration, or location collection.
+- The normal heartbeat removes only the
+  `co.contraption.toolbox.manual-location` LaunchAgent and its private
+  `.runtime/manual-location` directory after a successful unload. Preserve all
+  other LaunchAgents, the Ruby interpreter, and macOS Accessibility settings.
+- Keep retirement guarded to the verified production checkout, bounded,
+  idempotent, and isolated from unrelated application checks. Test it with
+  temporary directories and mocked launchctl, never real services.
 
 ## Use a separate checkout
 

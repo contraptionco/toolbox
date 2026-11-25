@@ -313,127 +313,19 @@ heartbeat detects the changed dotenv bytes, recreates Manual's containers, and
 waits for health even if the application commit has not changed. Do not edit the
 generated `.env` or disable the cache globally.
 
-#### Find My locations
+#### Retired Find My bridge
 
-Manual can read explicitly mapped family locations from Find My on the Mac. The
-application stays in Docker. An optional native LaunchAgent,
-`co.contraption.toolbox.manual-location`, serves only **127.0.0.1:4180**. Docker
-Desktop reaches it through `host.docker.internal`; it has no public tunnel route.
+Manual no longer reads Find My. Its calendar locations describe plans only.
+The next normal heartbeat unloads only
+`co.contraption.toolbox.manual-location`, removes its LaunchAgent plist, and
+removes `.runtime/manual-location`, including the old shared key and native
+reader. Cleanup is idempotent and leaves every other service untouched. If
+unloading fails, it retains the files and retries on the next heartbeat.
 
-The Mac must have a logged-in graphical session, Find My signed in, and the
-relevant people already sharing their locations. In each Manual profile, set the
-exact Find My display name. The bridge reads only those requested names. It does
-not change Apple sharing permissions, read Apple account caches, or use the
-keychain. Duplicate names with conflicting rows are unavailable rather than
-guessed. This uses Find My's English Accessibility interface, not a supported
-Apple People API, so macOS interface changes can require a reader update.
-
-For an authorized production setup, create
-`~/code/toolbox/.runtime/manual-location/config.json` as a regular, owner-owned
-file with mode `0600`, in an owner-only directory. It contains only:
-
-```json
-{"key":"<random URL-safe key of at least 43 characters>"}
-```
-
-Set these variables in the `manual` 1Password item's `ENV` field:
-
-```dotenv
-MANUAL_LOCATION_BRIDGE_URL=http://host.docker.internal:4180
-MANUAL_LOCATION_BRIDGE_KEY=<the same key>
-```
-
-The key is a separate, narrow credential. Do not reuse an Apple, 1Password, or
-application signing credential. Keep it out of shell arguments, logs, and Git.
-The heartbeat compiles `native/find_my_reader.swift`, installs the locked Ruby
-dependencies, and starts only this LaunchAgent when the private configuration
-exists. In **System Settings → Privacy & Security → Accessibility**, grant access
-to both `~/code/toolbox/.runtime/manual-location/find-my-reader` and the Ruby
-executable that launches this helper. Read the exact interpreter path from the
-installed LaunchAgent without printing its environment:
-
-```sh
-/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \
-  "$HOME/Library/LaunchAgents/co.contraption.toolbox.manual-location.plist"
-```
-
-For example, the current installation uses
-`/Users/philip/.asdf/installs/ruby/3.4.1/bin/ruby`. Use the command's actual output;
-the version and path can change. A changed reader or interpreter may need approval
-again; unrelated Toolbox releases preserve the reader binary.
-
-If `permission_required` persists with the reader enabled, check the exact Ruby
-entry too. macOS attributes this LaunchAgent's child Accessibility requests to
-Ruby as the responsible process, so the reader's grant alone is insufficient.
-The reader starts fresh for every refresh; restarting it does not grant its
-parent permission. Do not grant unrelated interpreters or change the TCC database.
-
-`GET /healthz` reports the helper revision, not Find My availability. Authenticated
-`POST /v1/locations` accepts `people: [{personId, findMyName, findMySource}]` and
-`refresh`. `findMySource` is `person` or `device`; omitting it preserves the
-original People mapping. Use the exact displayed device name for a phone that
-supplies someone's own location. `Me` without an observation time is not a
-substitute. Responses retain `source: "find-my"` and include `findMySource` so
-Manual can distinguish a device observation from a People observation.
-Devices may omit distance while still reporting a location and explicit age.
-That verified device layout uses separate label/age fields internally; the
-reader does not invent a zero distance or weaken People name matching.
-
-Refresh runs asynchronously and may activate Find My or select its People or
-Devices tab. Mixed requests read those tabs sequentially, with a separate bounded
-native invocation for each: 30 seconds inside the reader and a 35-second outer
-process limit. Tab and row transitions use bounded passive settling, not repeated
-commands. Source and exact name jointly identify cached data, refresh intervals,
-and failures. Concurrent requests share one worker, and each mapping waits two
-minutes after its last completed attempt before another refresh. This cooldown
-uses a monotonic clock; a clock adjustment does not start duplicate work. Cached
-observations are returned immediately while an eligible refresh runs. The
-`refreshing` flag covers only the requested mappings. On older interfaces, it may
-open a mapped person's or device's read-only detail card to
-verify the exact name separately from the combined sidebar label. The same row
-must be selected, and a preexisting header cannot validate selecting another row.
-Ambiguous candidates remain unavailable. It never invokes sharing actions or
-context menus. A missing Accessibility grant returns `permission_required`. A
-locked session returns `source_locked` before activating Find My. An unavailable
-app, missing person, or unsupported interface cannot produce a new observation.
-Device support currently requires the verified legacy sidebar and
-detail-card layout; unsupported layouts fail closed. It never presses device
-actions such as Play Sound, Mark As Lost, or Erase.
-
-For supported layouts, the reader opens the verified bubble's **More Info**
-control and reads the Info panel's separate name, street address, and observation
-age fields. It closes only that read-only panel, waits for the sidebar to return,
-and verifies the selected source again. A response may include `address` alongside
-`label` when the exact identity and both observation ages agree. Generic city
-labels, missing timestamps, mismatched panels, and unsupported address formats
-never become precise addresses. Opening Info does not invoke its sharing or
-settings controls. Address data has the same private, latest-only lifetime as
-the observation and is omitted for paused, expired, or unavailable readings.
-
-Only the latest observations are held in memory. There is no location history,
-background collection timer, request log, or coordinate extraction. A displayed
-`Now` or explicit age in the sidebar supplies the observation time. `Paused` is
-always marked paused with no observation time; directions travel times are never freshness
-evidence. A reading is current for at most 15 minutes. A locked Mac, temporary
-missing row, or reader failure can retain the complete prior verified observation
-as **stale**, bounded to 24 hours from both its original observation time and
-successful read. Each returned observation includes its original `checkedAt`;
-neither timestamp advances on cache reads or failed refreshes. The top-level
-`checkedAt` is the last refresh attempt, and `reason` describes a source failure.
-Paused readings still expire after 15 minutes because they have no observation
-timestamp. Permission denial removes the affected cached observation.
-The memory cache is cleared when the helper restarts. Unrelated Toolbox commits
-do not restart it: its health revision fingerprints only helper code,
-dependencies, interpreter, runtime paths, and the private key. Relevant changes
-still restart it. There is no retained location after a reboot until a successful
-read with the Mac unlocked. Manual must distinguish these last-known observations from calendar
-locations, which are plans. Responses are private and never cached by a CDN.
-Existing Find My place labels, including Home and Work, are preserved. The helper
-does not guess a place from a city, calendar entry, distance, or device name.
-
-Removing the private configuration disables the helper on the next heartbeat,
-unloads its own LaunchAgent, and leaves other services untouched. Optional-helper
-failures do not skip application deployment checks.
+The old `MANUAL_LOCATION_BRIDGE_URL` and `MANUAL_LOCATION_BRIDGE_KEY` entries can
+be removed from the `manual` 1Password item's multiline `ENV` field. Manual no
+longer reads them. Toolbox does not modify the source item or macOS Accessibility
+settings; the existing Ruby interpreter may still be used by other applications.
 
 ### PostgreSQL backups, including Manual
 
