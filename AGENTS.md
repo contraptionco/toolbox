@@ -205,3 +205,11 @@ or infer off-host backup coverage from the existing PostgreSQL backup. The app
 service creates checkpointed local snapshots; those same-host copies do not
 protect against host loss. Development tests use temporary paths and synthetic
 secrets only. No services or production runtime files are changed by tests.
+
+The analytics email is a separate daily report from the personal morning report.
+Its scheduler route is `/api/cron/analytics-report`, polled every 15 minutes at
+11:00 and 12:00 UTC; the app gates 7am New York and summarizes the previous local
+calendar day. Deploy its app route before the scheduler entry, or coordinate the
+reviewed app and Toolbox merges under the heartbeat maintenance lock. Preserve
+the existing attempt ledger and all other schedules; rollback the matching frozen
+scheduler configuration when rolling back to an app without this route.

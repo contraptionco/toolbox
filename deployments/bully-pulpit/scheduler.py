@@ -18,6 +18,7 @@ SCHEDULES = {
     '/api/cron/bell-retention': '17 10 * * *',
     '/api/cron/subscriber-backup': '0 11 1 * *',
     '/api/cron/morning-report': '*/15 11,12 * * *',
+    '/api/cron/analytics-report': '*/15 11,12 * * *',
 }
 
 
@@ -25,7 +26,8 @@ def due(now):
     paths = []
     if now.minute % 15 == 0:
         paths.append('/api/cron/suppression-sync')
-        if now.hour in (11, 12): paths.append('/api/cron/morning-report')
+        if now.hour in (11, 12):
+            paths.extend(('/api/cron/morning-report', '/api/cron/analytics-report'))
     if (now.hour, now.minute) == (10, 17): paths.append('/api/cron/bell-retention')
     if (now.day, now.hour, now.minute) == (1, 11, 0): paths.append('/api/cron/subscriber-backup')
     return paths
@@ -71,7 +73,7 @@ def tick(db, now, role, secret, send=deliver):
     minute = int(now.timestamp()) // 60
     previous = db.execute('SELECT seen,role FROM heartbeat WHERE id=1').fetchone()
     # Record missed work after downtime, without replaying old sends. The route
-    # owns morning-report catch-up during its current New York morning window.
+    # owns each daily report's catch-up during its current New York morning window.
     if role == 'primary' and previous and previous[1] == 'primary':
         for missed in range(max(previous[0] // 60 + 1, minute - 2 * 24 * 60), minute):
             for path in due(dt.datetime.fromtimestamp(missed * 60, dt.timezone.utc)):
