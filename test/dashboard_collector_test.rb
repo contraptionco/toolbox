@@ -125,6 +125,46 @@ class DashboardCollectorTest < Minitest::Test
     refute disk[:reclaimable_available]
   end
 
+  def test_compose_app_uses_explicit_container_name_and_migration_is_managed_inventory
+    collector = compose_collector
+    stub_compose_inventory(app_running: true, migration_state: 'running')
+
+    result = collector.snapshot
+    app = result[:applications].find { |item| item[:name] == 'wiki' }
+    assert_equal 'wiki-web-custom', app[:container_name]
+    assert_equal 'running', app[:status]
+    migration = result[:containers].find { |item| item[:name] == 'wiki-init-custom' }
+    assert migration[:configured]
+    assert migration[:one_shot]
+    assert_equal 'wiki', migration[:application]
+    refute result[:applications].any? { |item| item[:container_name] == 'wiki-init-custom' }
+    refute result[:warnings].any? { |line| line.include?('wiki') }
+    assert_includes result[:log_sources], { id: 'container:wiki-init-custom', label: 'wiki-init-custom' }
+    assert_empty result[:errors]
+  end
+
+  def test_completed_or_absent_compose_migration_does_not_raise_stopped_warning
+    collector = compose_collector
+    ['exited', nil].each do |migration_state|
+      stub_compose_inventory(app_running: true, migration_state: migration_state)
+      result = collector.snapshot
+      assert_equal 'running', result[:applications].find { |item| item[:name] == 'wiki' }[:status]
+      refute result[:warnings].any? { |line| line.include?('wiki') }
+      assert_empty result[:errors]
+    end
+  end
+
+  def test_missing_compose_app_warns_even_when_migration_is_running
+    collector = compose_collector
+    stub_compose_inventory(app_running: false, migration_state: 'running')
+
+    result = collector.snapshot
+    assert_equal 'stopped', result[:applications].find { |item| item[:name] == 'wiki' }[:status]
+    assert_includes result[:warnings], 'Configured application wiki is not running.'
+    refute result[:warnings].any? { |line| line.include?('wiki-init-custom') }
+    assert_empty result[:errors]
+  end
+
   def test_immediate_free_reserve_cannot_be_satisfied_by_reclaimable_capacity
     @runner.add(native_capacity_command, JSON.generate('NSURLVolumeTotalCapacityKey' => 500 * GIB,
                                                        'NSURLVolumeAvailableCapacityKey' => 19 * GIB,
@@ -316,6 +356,26 @@ class DashboardCollectorTest < Minitest::Test
   end
 
   private
+
+  def compose_collector
+    @config::GIT_SERVICES << {
+      name: 'wiki', use_compose: true,
+      dashboard: { container_name: 'wiki-web-custom', one_shot_containers: ['wiki-init-custom'] }
+    }
+    Dashboard::Collector.new(repo_dir: @directory, config: @config, runner: @runner,
+                             clock: -> { @now }, hostname: 'Mac mini', platform: 'arm64-darwin',
+                             docker_disk_path: File.join(@directory, 'Docker.raw'))
+  end
+
+  def stub_compose_inventory(app_running:, migration_state:)
+    rows = []
+    rows << { id: POSTCARD_ID, name: 'wiki-web-custom', image: 'wiki-app', state: 'running', status: 'Up' } if app_running
+    rows << { id: OTHER_ID, name: 'wiki-init-custom', image: 'wiki-migrate', state: migration_state, status: migration_state } if migration_state
+    @runner.add(['docker', 'ps', '-a', '--no-trunc', '--format', Dashboard::Collector::PS_FORMAT], rows.map { |row| JSON.generate(row) }.join("\n"))
+    running = rows.select { |row| row[:state] == 'running' }
+    @runner.add(['docker', 'stats', '--no-stream', '--no-trunc', '--format', Dashboard::Collector::STATS_FORMAT, *running.map { |row| row[:id] }], '') unless running.empty?
+    @runner.add(['docker', 'inspect', '--format', Dashboard::Collector::INSPECT_FORMAT, *rows.map { |row| row[:id] }], '') unless rows.empty?
+  end
 
   def stub_host
     @runner.add(['df', '-Pk', @directory], "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk 524288000 487587840 36700160 93% /\n")

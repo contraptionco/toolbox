@@ -92,6 +92,28 @@ module Config
   # These can be code that gets built and deployed, or code that runs in containers
   GIT_SERVICES = [
     {
+      name: 'bully-pulpit-production',
+      repo_url: 'git@github.com:philipithomas/bully-pulpit.git',
+      local_path: "#{CODE_DIR}/bully-pulpit-production",
+      branch: 'main',
+      # Merging configuration alone cannot start a second production writer.
+      enabled_if: "#{DATA_DIR}/bully-pulpit/enabled.json",
+      env_config: { type: '1password', item: 'Bully Pulpit Production', field: 'ENV' },
+      env_file_path: "#{DATA_DIR}/bully-pulpit/secrets/app.env",
+      build_cmd: "python3 #{CODE_DIR}/toolbox/deployments/bully-pulpit/deploy.py prepare",
+      release_environment: true,
+      release_inputs: %w[compose.yml nginx.conf scheduler.py deploy.py secrets.py].map { |file| "#{CODE_DIR}/toolbox/deployments/bully-pulpit/#{file}" },
+      use_compose: true,
+      compose_file: "#{DATA_DIR}/bully-pulpit/compose.json",
+      compose_readiness_services: %w[app proxy scheduler],
+      after_deploy_command: "python3 #{CODE_DIR}/toolbox/deployments/bully-pulpit/deploy.py record",
+      dashboard: {
+        container_name: 'bully-pulpit-production',
+        one_shot_containers: ['bully-pulpit-production-migrate']
+      },
+      auto_update: true
+    },
+    {
       name: 'postcard',                                          # Service name
       repo_url: 'git@github.com:contraptionco/postcard.git',     # CHANGE THIS to your repository
       local_path: "#{CODE_DIR}/postcard",                        # Where to clone the repo
@@ -207,6 +229,43 @@ module Config
         }
       },
       auto_update: true                                      # Whether to auto-update when repo changes
+    },
+    {
+      name: 'manual',
+      repo_url: 'git@github.com:philipithomas/manual.git',
+      local_path: "#{CODE_DIR}/manual",
+      branch: 'main',
+      env_config: { type: '1password', item: 'manual', field: 'ENV' },
+      # Both images are built from the verified release snapshot, without secrets.
+      build_cmd: 'docker build --target tools --tag manual-migrate . && docker build --target runner --tag manual-app .',
+      use_compose: true,
+      dashboard: { container_name: 'manual-app-1', one_shot_containers: ['manual-migrate-1'] },
+      compose_override: {
+        services: {
+          migrate: {
+            container_name: 'manual-migrate-1',
+            pull_policy: 'never',
+            logging: { driver: 'local', options: { 'max-size' => '10m', 'max-file' => '3' } }
+          },
+          app: {
+            container_name: 'manual-app-1',
+            pull_policy: 'never',
+            # This Mac's nonsecret LAN device settings belong to its deployment.
+            # Keep credentials in the 1Password ENV field, supplied at runtime.
+            environment: {
+              AWAIR_LOCAL_URL: 'http://awair-elem-1425e2.local',
+              AWAIR_DEVICE_MAC: '70:88:6B:14:25:E2',
+              HUE_BRIDGE_URL: 'https://0017886136a4.local',
+              HUE_BRIDGE_ID: '001788FFFE6136A4'
+            },
+            logging: { driver: 'local', options: { 'max-size' => '10m', 'max-file' => '3' } }
+          }
+        },
+        networks: {
+          default: { external: true, name: NETWORK_NAME }
+        }
+      },
+      auto_update: true
     }
   ]
 
@@ -238,7 +297,8 @@ module Config
   # dashboard observes these containers; it never starts, rebuilds or updates
   # them. The parallel Bully Pulpit release follows a reviewed branch SHA.
   COMPOSE_APPLICATIONS = [
-    { name: 'bully-pulpit', containers: ['bully-pulpit', 'bully-pulpit-postgres', 'bully-pulpit-proxy'] }
+    { name: 'bully-pulpit-pilot', containers: ['bully-pulpit', 'bully-pulpit-postgres', 'bully-pulpit-proxy'] },
+    { name: 'bully-pulpit-production-companions', containers: ['bully-pulpit-production-proxy', 'bully-pulpit-production-scheduler'] }
   ].freeze
 
   #-----------------------------------------------------------------------------------

@@ -5,22 +5,21 @@ Cloudflare Tunnel, backups, and other host services. A scheduled macOS LaunchAge
 invokes the heartbeat from `/Users/philip/code/toolbox` every minute.
 
 Postcard and its PostgreSQL database are the critical application services on this
-Mac. Bully Pulpit is also critical, but runs on Vercel; preserve its local
-checkouts and development work without treating them as Mac-hosted production.
-The parallel Bully Pulpit deployment at `bully-pulpit.contraption.co` uses the
-Compose project in `deployments/bully-pulpit/`, separate containers and PostgreSQL
-data under `/Users/philip/data/bully-pulpit-local`. Its secrets belong to the
-`Bully Pulpit Toolbox` 1Password item. It is a production-mode application with
-live provider credentials, but has `DEPLOYMENT_ROLE=parallel`: scheduled work,
-bulk newsletters and inbound phone/provider callbacks remain on Vercel.
-Never change Vercel domains, schedules or credentials as part of a local release.
-Deploy only an explicitly selected pushed commit; do not build from a development
-directory. The dashboard observes these Compose containers, while the heartbeat
-does not release them. Do not run `down -v` or include their databases in a cleanup.
-Cloudflare MCP manages the public hostname's remote tunnel ingress; the normalized
-Workflow endpoint deny in nginx is also required. The worker calls loopback inside
-the app container. Public access is intentional; existing app authentication
-protects subscriber/admin data. Blob and AI Gateway remain external services.
+Mac. Bully Pulpit is also critical. Check its runtime markers and current DNS
+before assuming the prepared local deployment is serving production. Preserve
+its development checkouts.
+The production Bully Pulpit migration is configured in
+`deployments/bully-pulpit/`. The normal heartbeat uses its dedicated deployment
+checkout `/Users/philip/code/bully-pulpit-production`, runtime directory
+`/Users/philip/data/bully-pulpit`, and `Bully Pulpit Production` vault item. It
+uses app-owned databases inside the existing managed `postgres` container.
+Merging configuration alone does not enable it: the final verified cloud-copy
+record, explicit enable marker, and separate primary activation marker gate
+rollout. Preserve the old pilot runtime and `bully-pulpit-postgres` until explicit
+retirement. The production app/proxy/scheduler use distinct container names.
+Keep the public normalized Workflow deny, private runtime secrets, exact release
+image records, and durable cron attempt ledger. Follow the deployment README for
+cutover and rollback; never restore an old database to undo an image deployment.
 
 The two font repositories have different hosting: `philipithomas/fonts` serves
 `fonts.philipithomas.com` on Vercel; its old `philipithomas-fonts` Mac deployment
@@ -109,6 +108,18 @@ LaunchAgent state, which can contain secrets.
   There is no auth-bypass mode that reads the production host. Stop demo servers
   after testing. Match Bully Pulpit's typography, warm colors and square controls.
   Reuse the README's `assets/toolbox.svg` logo rather than inventing a wordmark.
+
+## Retired Manual location bridge
+
+- Find My integration is retired. Do not recreate its native reader, service,
+  configuration, or location collection.
+- The normal heartbeat removes only the
+  `co.contraption.toolbox.manual-location` LaunchAgent and its private
+  `.runtime/manual-location` directory after a successful unload. Preserve all
+  other LaunchAgents, the Ruby interpreter, and macOS Accessibility settings.
+- Keep retirement guarded to the verified production checkout, bounded,
+  idempotent, and isolated from unrelated application checks. Test it with
+  temporary directories and mocked launchctl, never real services.
 
 ## Use a separate checkout
 

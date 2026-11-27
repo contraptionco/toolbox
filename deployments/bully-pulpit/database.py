@@ -19,12 +19,13 @@ import time
 from urllib.parse import parse_qs, unquote, urlsplit
 import uuid
 
-ROOT = Path('/Users/philip/data/bully-pulpit-local')
-CONTAINER = 'bully-pulpit-postgres'
+ROOT = Path('/Users/philip/data/bully-pulpit')
+CONTAINER = 'postgres'
+SERVER_IMAGE = 'pgvector/pgvector:pg17'
 IMAGE = 'postgres:17-bookworm@sha256:839fbb5a4942a7758dd93e18b42ea5649807491a0545b5eeeb8f0b8bb11857a5'
-ADMIN = 'bully_admin'
-APP_DB = 'bully_pulpit_toolbox'
-WORKFLOW_DB = 'bully_pulpit_workflow_toolbox'
+ADMIN = 'toolbox'
+APP_DB = 'bully_pulpit'
+WORKFLOW_DB = 'bully_pulpit_workflow'
 DATABASES = {APP_DB: ('bully_pulpit', 'APP_DB_PASSWORD'),
              WORKFLOW_DB: ('bully_workflow', 'WORKFLOW_DB_PASSWORD')}
 EXCLUDED_SCHEMAS = ('workflow', 'workflow_drizzle', 'graphile_worker')
@@ -286,8 +287,8 @@ class DatabaseTool:
                                '{"name":{{json .Name}},"image":{{json .Config.Image}},"running":{{json .State.Running}}}',
                                CONTAINER])
         state = json.loads(raw)
-        if state != {'name': '/' + CONTAINER, 'image': IMAGE, 'running': True}:
-            raise Refused('Dedicated PostgreSQL container identity does not match the pinned deployment')
+        if state != {'name': '/' + CONTAINER, 'image': SERVER_IMAGE, 'running': True}:
+            raise Refused('Managed PostgreSQL container identity does not match Toolbox configuration')
 
     def local(self, database, sql):
         if database not in (*DATABASES, 'postgres'):
@@ -299,22 +300,30 @@ class DatabaseTool:
     def initialize(self):
         self.prepare()
         identities = private_json(self.root / 'secrets' / 'identity.json')
-        for database, (role, password_key) in DATABASES.items():
+        # Validate every credential before touching either database or role.
+        # Names alone do not prove an existing cluster-wide role belongs to us.
+        role_statements = []
+        for role, password_key in DATABASES.values():
             password = identities.get(password_key)
             if not isinstance(password, str) or len(password) < 32:
                 raise Refused('Dedicated database passwords must contain at least 32 characters')
-            # Passwords are passed over stdin; no SQL or database errors are printed.
-            sql = ("SET standard_conforming_strings=on;\n"
-                   f"SELECT 'CREATE ROLE {role}' WHERE NOT EXISTS "
-                   f"(SELECT FROM pg_roles WHERE rolname={literal(role)})\n\\gexec\n"
-                   f"ALTER ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
-                   f"NOREPLICATION NOBYPASSRLS PASSWORD {literal(password)};\n")
-            self.local('postgres', sql)
-            owner = self.local('postgres', f"SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname={literal(database)};").strip()
-            if owner and owner != role:
-                raise Refused('Existing dedicated database has an unexpected owner')
-            if not owner:
-                self.local('postgres', f"CREATE DATABASE {database} OWNER {role} TEMPLATE template0 ENCODING 'UTF8';")
+            role_statements.append(
+                f"CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                f"NOREPLICATION NOBYPASSRLS PASSWORD {literal(password)};")
+        role_names = ', '.join(literal(role) for role, _ in DATABASES.values())
+        database_names = ', '.join(literal(name) for name in DATABASES)
+        existing = json.loads(self.local('postgres', f"""SELECT json_build_object(
+ 'roles', (SELECT coalesce(json_agg(rolname), '[]') FROM pg_roles WHERE rolname IN ({role_names})),
+ 'databases', (SELECT coalesce(json_agg(datname), '[]') FROM pg_database WHERE datname IN ({database_names})));"""))
+        if existing != {'roles': [], 'databases': []}:
+            raise Refused('Initialization requires fresh roles and databases; existing names or a partial '
+                          'initialization require operator review. No existing credentials or data were changed')
+        # Passwords go over stdin. A concurrent role-name conflict rolls back both
+        # creations, rather than changing or adopting any pre-existing identity.
+        self.local('postgres', "SET standard_conforming_strings=on;\nBEGIN;\n" +
+                   '\n'.join(role_statements) + '\nCOMMIT;')
+        for database, (role, _) in DATABASES.items():
+            self.local('postgres', f"CREATE DATABASE {database} OWNER {role} TEMPLATE template0 ENCODING 'UTF8';")
             self.local(database, f"REVOKE ALL ON DATABASE {database} FROM PUBLIC;\n"
                        f"CREATE SCHEMA IF NOT EXISTS public AUTHORIZATION {role};\n"
                        f"ALTER SCHEMA public OWNER TO {role};\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;")
@@ -412,7 +421,7 @@ class DatabaseTool:
         if actual != expected:
             raise Refused('Restored table counts differ from the exported source snapshot; copy is not verified')
         report = {'verified': True, 'application_database': APP_DB, 'backup_file': str(archive),
-                  'manifest_file': str(manifest_path), 'verified_at': now(),
+                  'manifest_file': str(manifest_path), 'source_sha256': manifest['sha256'], 'verified_at': now(),
                   'table_count': len(actual), 'total_rows': sum(actual.values())}
         write_json(marker, report)
         return report

@@ -29,9 +29,10 @@ class FakeRunner:
         self.other_connections = False
         self.counts = COUNTS
         self.metadata = dict(METADATA)
-        self.container = {'name': '/' + database.CONTAINER, 'image': database.IMAGE, 'running': True}
+        self.container = {'name': '/' + database.CONTAINER, 'image': database.SERVER_IMAGE, 'running': True}
         self.archive_listing = '5; 2615 2200 SCHEMA - public owner\n'
-        self.owner = ''
+        self.existing_roles = []
+        self.existing_databases = []
 
     def run(self, args, **kwargs):
         self.calls.append((args, kwargs))
@@ -52,8 +53,8 @@ class FakeRunner:
             return self.counts
         if sql.startswith('SELECT pg_database_size'):
             return '1024\n'
-        if sql.startswith('SELECT pg_get_userbyid'):
-            return self.owner
+        if "'roles'" in sql:
+            return json.dumps({'roles': self.existing_roles, 'databases': self.existing_databases})
         return ''
 
 
@@ -119,7 +120,7 @@ class DatabaseTest(unittest.TestCase):
             database.private_json(link)
 
     def test_wrong_container_or_image_cannot_initialize(self):
-        for field, value in [('name', '/postgres'), ('image', 'postgres:latest'), ('running', False)]:
+        for field, value in [('name', '/bully-pulpit-postgres'), ('image', 'postgres:latest'), ('running', False)]:
             original = self.runner.container[field]
             self.runner.container[field] = value
             with self.assertRaisesRegex(database.Refused, 'identity'):
@@ -134,17 +135,58 @@ class DatabaseTest(unittest.TestCase):
         sql = '\n'.join(kwargs.get('sql', '') for _, kwargs in self.runner.calls)
         self.assertIn("PASSWORD 'a''", sql)
         self.assertIn('NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', sql)
-        self.assertIn('CREATE DATABASE bully_pulpit_workflow_toolbox OWNER bully_workflow', sql)
+        self.assertIn('CREATE DATABASE bully_pulpit_workflow OWNER bully_workflow', sql)
         self.assertNotIn('REASSIGN OWNED', sql)
+        self.assertNotIn('ALTER ROLE', sql)
+        role_sql = next(kw['sql'] for _, kw in self.runner.calls if 'CREATE ROLE' in kw.get('sql', ''))
+        self.assertIn('BEGIN;\nCREATE ROLE bully_pulpit ', role_sql)
+        self.assertIn('CREATE ROLE bully_workflow ', role_sql)
+        self.assertTrue(role_sql.endswith('COMMIT;'))
         for call, _ in self.runner.calls:
             if call[1] == 'exec':
                 self.assertEqual(database.CONTAINER, call[3])
 
-    def test_existing_owner_refuses_database_reassignment(self):
-        self.runner.owner = 'someone_else'
-        with self.assertRaisesRegex(database.Refused, 'unexpected owner'):
-            self.tool.initialize()
-        self.assertFalse(any('CREATE DATABASE' in kw.get('sql', '') for _, kw in self.runner.calls))
+    def assert_no_initialization_changes(self):
+        self.assertFalse(any(any(command in kw.get('sql', '') for command in
+                             ('CREATE ROLE', 'ALTER ROLE', 'CREATE DATABASE', 'REVOKE', 'ALTER SCHEMA'))
+                             for _, kw in self.runner.calls))
+
+    def test_any_existing_role_or_database_refuses_before_either_is_changed(self):
+        # Includes a same-named role with no database and a partial earlier init.
+        # Existing names are never treated as evidence of dedicated ownership.
+        for attribute, names in [('existing_roles', [role for role, _ in database.DATABASES.values()]),
+                                 ('existing_databases', list(database.DATABASES))]:
+            for name in names:
+                with self.subTest(attribute=attribute, name=name):
+                    setattr(self.runner, attribute, [name])
+                    with self.assertRaisesRegex(database.Refused, 'operator review'):
+                        self.tool.initialize()
+                    self.assert_no_initialization_changes()
+                    setattr(self.runner, attribute, [])
+                    self.runner.calls.clear()
+
+    def test_invalid_second_password_refuses_before_any_database_or_role_change(self):
+        for password in ['too-short', 'b' * 40 + '\x00']:
+            with self.subTest(password_kind='nul' if '\x00' in password else 'short'):
+                identity = self.root / 'secrets' / 'identity.json'
+                identity.write_text(json.dumps({'APP_DB_PASSWORD': 'a' * 40,
+                                                'WORKFLOW_DB_PASSWORD': password}))
+                with self.assertRaises(database.Refused):
+                    self.tool.initialize()
+                self.assert_no_initialization_changes()
+                self.assertTrue(all(args[1] == 'inspect' for args, _ in self.runner.calls))
+                self.runner.calls.clear()
+
+    def test_role_creation_failure_never_reaches_database_creation(self):
+        original = self.runner.run
+        def fail_role_creation(args, **kwargs):
+            if 'CREATE ROLE' in kwargs.get('sql', ''):
+                raise database.Refused('Simulated concurrent role-name conflict')
+            return original(args, **kwargs)
+        with patch.object(self.runner, 'run', side_effect=fail_role_creation):
+            with self.assertRaisesRegex(database.Refused, 'role-name conflict'):
+                self.tool.initialize()
+        self.assert_no_initialization_changes()
 
     def test_copy_refuses_existing_data_connections_or_marker(self):
         for attribute in ('occupied', 'other_connections'):

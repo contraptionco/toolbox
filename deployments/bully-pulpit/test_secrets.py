@@ -12,19 +12,18 @@ SPEC.loader.exec_module(secrets)
 class SecretBoundaryTest(unittest.TestCase):
     def fixture(self):
         return {
-            'APP_RUNTIME': 'toolbox', 'DEPLOYMENT_ROLE': 'parallel',
-            'APP_URL': 'https://bully-pulpit.contraption.co',
-            'DATABASE_URL': 'postgres://bully_pulpit:fixture@postgres/bully_pulpit_toolbox',
-            'WORKFLOW_POSTGRES_URL': 'postgres://bully_workflow:fixture@postgres/bully_pulpit_workflow_toolbox',
+            'APP_ENV': 'production', 'APP_RUNTIME': 'toolbox', 'DEPLOYMENT_ROLE': 'parallel',
+            'APP_URL': 'https://www.philipithomas.com',
+            'DATABASE_URL': 'postgres://bully_pulpit:fixture@postgres/bully_pulpit',
+            'WORKFLOW_POSTGRES_URL': 'postgres://bully_workflow:fixture@postgres/bully_pulpit_workflow',
         }
 
     def test_rejects_cloud_credentials_and_role_changes(self):
-        postgres = {'POSTGRES_USER': 'bully_admin', 'POSTGRES_PASSWORD': 'fixture'}
-        self.assertEqual('fixture', secrets.validate(self.fixture(), postgres)['APP_DB_PASSWORD'])
+        self.assertEqual('fixture', secrets.validate(self.fixture())['APP_DB_PASSWORD'])
         for key, value in [('DATABASE_URL', 'postgres://user:fixture@cloud.neon.tech/neondb'),
-                           ('DEPLOYMENT_ROLE', 'primary'), ('APP_URL', 'https://www.philipithomas.com')]:
+                           ('DEPLOYMENT_ROLE', 'unknown'), ('APP_URL', 'https://bully-pulpit.contraption.co')]:
             with self.assertRaises(ValueError):
-                secrets.validate({**self.fixture(), key: value}, postgres)
+                secrets.validate({**self.fixture(), key: value})
 
     def test_duplicate_or_invalid_keys_are_not_silently_overwritten(self):
         for value in ['NAME=first\nNAME=second\n', 'INVALID NAME=value\n']:

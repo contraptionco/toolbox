@@ -183,13 +183,14 @@ module Core
       end
     end
 
-    def self.run_build_command(local_path, build_cmd)
+    def self.run_build_command(local_path, build_cmd, environment: {})
       puts "Running build command in #{local_path}: #{build_cmd}"
       Dir.chdir(local_path) do
         _stdout, stderr, status = run_command(
           build_cmd,
           timeout: BUILD_TIMEOUT,
-          label: 'Project build'
+          label: 'Project build',
+          env: environment
         )
         raise "Error building project: #{stderr}" unless status.success?
         puts "Build completed successfully."
@@ -263,10 +264,10 @@ module Core
       changed
     end
 
-    def self.docker_compose_up(local_path, force_recreate: false)
+    def self.docker_compose_up(local_path, force_recreate: false, compose_file: nil)
       puts "Starting/Updating Docker Compose services in #{local_path}..."
       Dir.chdir(local_path) do
-        command = ['docker', 'compose', 'up', '--wait', '--detach']
+        command = compose_command(compose_file) + ['up', '--wait', '--detach']
         command << '--force-recreate' if force_recreate
         stdout, stderr, status = run_command(
           *command,
@@ -328,6 +329,73 @@ module Core
       end
     end
 
+    def self.compose_command(compose_file = nil)
+      command = ['docker', 'compose']
+      command.concat(['-f', compose_file]) if compose_file
+      command
+    end
+
+    # Opt-in readiness for supervised Compose applications. A surviving proxy
+    # is not evidence that its app or scheduler is healthy. Ignore completed
+    # one-shot migration services; every explicitly required service must be up.
+    def self.compose_status_rows(local_path, compose_file)
+      return [] unless compose_file && File.file?(compose_file)
+
+      stdout, _stderr, status = Dir.chdir(local_path) do
+        run_command(
+          *compose_command(compose_file), 'ps', '--all', '--format', 'json',
+          timeout: DOCKER_QUERY_TIMEOUT,
+          label: 'Docker Compose readiness'
+        )
+      end
+      raise 'Docker Compose readiness query failed' unless status.success?
+
+      text = stdout.strip
+      rows = if text.empty?
+               []
+             elsif text.start_with?('[')
+               JSON.parse(text)
+             else
+               text.lines.map { |line| JSON.parse(line) }
+             end
+      unless rows.is_a?(Array) && rows.all? { |row| row.is_a?(Hash) }
+        raise 'Docker Compose readiness response is invalid'
+      end
+      rows
+    rescue JSON::ParserError
+      raise 'Docker Compose readiness response is invalid'
+    end
+
+    def self.compose_services_ready?(local_path, compose_file, required_services)
+      rows = compose_status_rows(local_path, compose_file)
+      required_services.all? do |service|
+        matches = rows.select { |row| row['Service'] == service }
+        matches.length == 1 && matches.first['State'] == 'running' && matches.first['Health'] == 'healthy'
+      end
+    end
+
+    def self.compose_recovery_required?(local_path, compose_file, required_services)
+      rows = compose_status_rows(local_path, compose_file)
+      recover = false
+      unhealthy = []
+      required_services.each do |service|
+        matches = rows.select { |row| row['Service'] == service }
+        if matches.empty? || (matches.length == 1 && %w[created exited dead].include?(matches.first['State']))
+          recover = true
+        elsif matches.length != 1 || matches.first['State'] != 'running' || matches.first['Health'] != 'healthy'
+          unhealthy << service
+        end
+      end
+      # Missing/stopped services can still start alongside an unhealthy running
+      # companion; readiness must succeed afterward before recording a release.
+      return true if recover
+      unless unhealthy.empty?
+        # Restarting the scheduler cannot clear its durable failed-job ledger.
+        raise "Required Compose service #{unhealthy.join(', ')} is not healthy; inspect its health and repair the cause. Running services were left untouched"
+      end
+      false
+    end
+
     def self.compose_file_path(local_path)
       %w[compose.yml compose.yaml docker-compose.yml docker-compose.yaml]
         .map { |filename| File.join(local_path, filename) }
@@ -366,6 +434,7 @@ module Core
       if compose_override_path && File.exist?(compose_override_path)
         components << File.binread(compose_override_path)
       end
+      Array(service_config[:release_inputs]).each { |path| components << File.binread(path) }
       digest = Digest::SHA256.hexdigest(components.join("\0"))
       "#{head}\n#{digest}\n"
     end
@@ -483,6 +552,10 @@ module Core
 
     def self.update_git_service(service_config)
       name = service_config[:name]
+      if service_config[:enabled_if] && !File.file?(service_config[:enabled_if])
+        puts "Service #{name} is staged; waiting for its explicit enable marker."
+        return true
+      end
       local_path = service_config[:local_path]
       install_cmd = service_config[:install_cmd]
       use_compose = service_config[:use_compose]
@@ -494,14 +567,16 @@ module Core
       env_path = nil
       env_changed = false
       if service_config[:env_config]
-        env_path = if service_config[:container_config]
+        env_path = if service_config[:env_file_path]
+                     service_config[:env_file_path]
+                   elsif service_config[:container_config]
                      runtime_env_path(name)
                    else
                      File.join(local_path, '.env')
                    end
         env_changed = apply_env_file(env_path, service_config[:env_config])
 
-        if service_config[:container_config]
+        if service_config[:container_config] || service_config[:env_file_path]
           expanded_env_path = File.expand_path(env_path)
           expanded_repo_path = "#{File.expand_path(local_path)}/"
           raise 'Runtime environment file must be outside the Docker build context' if expanded_env_path.start_with?(expanded_repo_path)
@@ -532,10 +607,29 @@ module Core
       deployment_needed = release[:cloned] || service_config[:force_update] ||
                           deployment_required?(service_config, desired_state)
 
+      # Re-enter the verified release preparation path before recovering a
+      # missing/stopped supervised service, even when source/environment match.
+      # Revalidate activation/copy guards and take the protected backup first.
+      # Unhealthy running services require repair, never whole-stack restart loops.
+      readiness_services = service_config[:compose_readiness_services]
+      if readiness_services && !deployment_needed
+        deployment_needed = compose_recovery_required?(
+          local_path, service_config[:compose_file], readiness_services
+        )
+      end
+
       built_image_id = nil
       if deployment_needed && (service_config[:build_cmd] || service_config[:deploy_path] || service_config[:container_config])
         with_release_snapshot(local_path, head) do |source|
-          run_build_command(source, service_config[:build_cmd]) if service_config[:build_cmd]
+          if service_config[:build_cmd]
+            if service_config[:release_environment]
+              run_build_command(source, service_config[:build_cmd], environment: {
+                'TOOLBOX_RELEASE_SHA' => head, 'TOOLBOX_RUNTIME_ENV' => env_path.to_s
+              })
+            else
+              run_build_command(source, service_config[:build_cmd])
+            end
+          end
           deploy_files(source, service_config[:deploy_path]) if service_config[:deploy_path]
           if service_config[:container_config]&.dig(:image_name)
             built_image_id = build_docker_image(source, service_config[:container_config][:image_name])
@@ -611,7 +705,7 @@ module Core
           end
         end
       elsif use_compose || service_config[:compose_override]
-        base_compose_path = compose_file_path(local_path)
+        base_compose_path = service_config[:compose_file] || compose_file_path(local_path)
         if install_cmd && !base_compose_path
           puts "Docker Compose file missing. Running install command for #{name}..."
           run_install_command(local_path, install_cmd)
@@ -621,7 +715,7 @@ module Core
 
         stdout, stderr, status = Dir.chdir(local_path) do
           run_command(
-            'docker', 'compose', 'ps', '-q',
+            *compose_command(service_config[:compose_file]), 'ps', '-q',
             timeout: DOCKER_QUERY_TIMEOUT,
             label: 'Docker Compose status'
           )
@@ -632,7 +726,17 @@ module Core
         compose_changed = compose_override_changed || env_changed
         if deployment_needed || compose_changed || !compose_running
           puts "Ensuring Docker Compose services are up for #{name}..."
-          docker_compose_up(local_path, force_recreate: compose_changed)
+          if service_config[:compose_file]
+            docker_compose_up(local_path, force_recreate: compose_changed, compose_file: service_config[:compose_file])
+          else
+            docker_compose_up(local_path, force_recreate: compose_changed)
+          end
+          if readiness_services && !compose_services_ready?(local_path, service_config[:compose_file], readiness_services)
+            raise 'Required Docker Compose services failed readiness'
+          end
+          if service_config[:after_deploy_command]
+            run_build_command(local_path, service_config[:after_deploy_command])
+          end
         else
           puts "Docker Compose services for #{name} are already running."
         end
@@ -646,11 +750,12 @@ module Core
       true
     end
 
-    def self.run_command(*command, timeout:, label:)
+    def self.run_command(*command, timeout:, label:, env: {})
       Core::CommandRunner.capture3(
         *command,
         timeout: timeout,
-        label: label
+        label: label,
+        env: env
       )
     end
     private_class_method :run_command

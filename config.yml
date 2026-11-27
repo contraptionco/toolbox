@@ -39,8 +39,16 @@ ingress:
     service: http://localhost:3006
   - hostname: www.philipandemma.com
     service: http://localhost:3006
+  - hostname: manual.ilic.nyc
+    service: http://127.0.0.1:3007
+  - hostname: www.philipithomas.com
+    service: http://localhost:4244
   - hostname: philipithomas.com
-    service: http://localhost:3005
+    service: http://localhost:4244
+  - hostname: ilic.nyc
+    service: http://localhost:4244
+  - hostname: www.ilic.nyc
+    service: http://localhost:4244
   - hostname: redirector.contraption.co
     service: http://localhost:3005
   - hostname: booklet.group

@@ -1,166 +1,189 @@
-# Parallel Bully Pulpit hosting
+# Bully Pulpit production on Toolbox
 
-This configuration prepares a production-mode copy of Bully Pulpit at
-`https://bully-pulpit.contraption.co`, with live provider credentials. Initial
-launch is pending a verified production Neon copy and the release checks below.
-Vercel continues serving `www.philipithomas.com`. This is an explicit release,
-independent of Toolbox's heartbeat.
+Toolbox deploys the reviewed `main` branch to a dedicated checkout at
+`/Users/philip/code/bully-pulpit-production`. The ordinary heartbeat verifies the
+remote release, rejects dirty or unexpected branches, and builds an immutable
+archive of that commit. `/Users/philip/code/bully-pulpit` remains a development
+checkout. Production runtime files live under `/Users/philip/data/bully-pulpit`.
+The old pilot runtime and its separate PostgreSQL container remain untouched.
 
-The Compose project contains `bully-pulpit`, `bully-pulpit-postgres`, and
-`bully-pulpit-proxy`. Only the proxy publishes a port, on `127.0.0.1:4244`.
-Its network and PostgreSQL data are separate from Postcard and the shared
-Toolbox database. Docker restart policies restore the stack after Docker starts.
-The dashboard's `COMPOSE_APPLICATIONS` inventory observes it without releasing it.
+The new Compose project contains `bully-pulpit-production`, a one-shot migration
+container, `bully-pulpit-production-proxy`, and `bully-pulpit-production-scheduler`.
+Only the proxy publishes a port, `127.0.0.1:4244`. The app joins `toolbox_network`
+and connects to the existing `postgres` container. There is no new database
+server. The proxy and scheduler share a separate application network. The proxy
+serves `www.philipithomas.com`, preserves streaming, and denies normalized
+Workflow internal paths. The Workflow worker calls loopback inside the app.
+It also redirects `philipithomas.com` with HTTP 308 and `ilic.nyc` plus
+`www.ilic.nyc` with HTTP 307 to the fixed `https://www.philipithomas.com` origin,
+preserving each request's original escaped path and query string.
 
-## Credentials and data
+## Staging, credentials, and database copy
 
-Runtime files live under `/Users/philip/data/bully-pulpit-local` (mode0700), with
-mode0600 secrets outside every checkout and Docker build context. The canonical
-secret item is `Bully Pulpit Toolbox` in Toolbox's existing 1Password vault.
-`ENV` contains application variables and `POSTGRES_ENV` the database administrator
-environment. Keep real production keys; never substitute Stripe preview keys.
-Run `python3 deployments/bully-pulpit/secrets.py` to render these files using
-Toolbox's existing read-only service account. Creating/editing the vault item
-requires a human save or a separate provisioning account with write access;
-the running heartbeat account should remain read-only.
-The session, Bell identity, cron and local database keys are separate identities.
-Never print `docker inspect`, resolved Compose config, raw provider errors, or
-environment contents. Decrypted secret files must not become PR/CI artifacts.
+Merging this configuration cannot start the app. The heartbeat skips the service
+until `enabled.json` exists in the production runtime directory. The release
+helper also requires that marker to identify the verified cloud-copy archive.
+`DEPLOYMENT_ROLE=parallel` keeps scheduled work and primary-only side effects
+paused. A primary role additionally requires a matching `primary.json` marker.
+Removing `enabled.json` pauses future deployments; it does not stop an already
+running application or scheduler.
 
-The application database is `bully_pulpit_toolbox`; its role is `bully_pulpit`.
-Workflow uses a fresh `bully_pulpit_workflow_toolbox` database and `bully_workflow`
-role. Vercel Workflow state is not exported with the Neon business database.
-Copy Neon with the dedicated database tool, which rejects nonempty restore
-targets, compares table counts from one source snapshot, and preserves a private
-dump. Do not discard live local changes by rerunning the initial copy.
+Use the `Bully Pulpit Production` item in the existing Toolbox vault. Its `ENV`
+field is the canonical multiline runtime configuration. Toolbox's read-only
+service account reads it; creating or editing the item requires an authenticated
+provisioning account or a human save. Do not broaden heartbeat permissions.
+`secrets.py` renders owner-only files, extracts the two database passwords into
+private provisioning state, and rejects implicit database credential rotation.
+The application never receives cluster administrator credentials.
 
-## Release
+Required deployment identity:
 
-Run these commands from a separate, clean Toolbox checkout under
-`/Users/philip/development/`. The initial bootstrap starts PostgreSQL before the
-database commands; it does not require the application or proxy to be running.
+```dotenv
+APP_ENV=production
+APP_RUNTIME=toolbox
+DEPLOYMENT_ROLE=parallel
+APP_URL=https://www.philipithomas.com
+DATABASE_URL=postgresql://bully_pulpit:<encoded-password>@postgres/bully_pulpit
+WORKFLOW_POSTGRES_URL=postgresql://bully_workflow:<encoded-password>@postgres/bully_pulpit_workflow
+WORKFLOW_TARGET_WORLD=@workflow/world-postgres
+WORKFLOW_LOCAL_BASE_URL=http://127.0.0.1:3000
+PHOTO_ARCHIVE_S3_BUCKET=<private-photo-bucket>
+PHOTO_ARCHIVE_S3_REGION=us-east-2
+```
 
-1. Test and push both feature branches; keep full PRs open and verify CI. Select
-   the full pushed application commit for this release.
-2. Provision the private runtime directory and render its local credentials:
+Preserve existing JWT and Bell identity secrets to retain session identity. Include
+Turnstile keys restricted to the production host, direct OpenAI credentials,
+AWS/SES credentials, live Stripe credentials, Twilio and OAuth credentials, and
+other settings documented by the application. No Vercel storage or AI Gateway
+credentials are needed. Only explicit public values (Turnstile site key, Google
+client ID, Stripe publishable key, phone number, canonical origin) enter Docker
+build arguments. Runtime secrets remain outside checkouts and build contexts.
+The scheduler receives only the cron bearer secret and deployment role.
 
-   ```sh
-   python3 deployments/bully-pulpit/secrets.py
-   ```
+From the reviewed production Toolbox checkout, after preparing the vault item:
 
-3. Build the selected application commit:
+```sh
+python3 deployments/bully-pulpit/secrets.py
+python3 deployments/bully-pulpit/database.py init
+```
 
-   ```sh
-   BULLY_APP_COMMIT='<full-pushed-app-sha>'
-   python3 deployments/bully-pulpit/deploy.py --commit "$BULLY_APP_COMMIT" --build-only
-   ```
+Initialization creates `bully_pulpit` and `bully_pulpit_workflow` in managed
+`postgres`, owned by `bully_pulpit` and `bully_workflow` respectively. Their roles
+have no superuser, create-role, create-database, replication or bypass-RLS rights.
+Public connection privileges on these two databases are revoked. Other databases
+and the old pilot are not modified. Cluster-local administrator access is used
+only by the operator's bounded provisioning/copy tool. Initialization validates
+both credentials and requires both role names and both database names to be
+unused before it changes anything. It never adopts an existing role or resets
+its password. Role creation is transactional, but PostgreSQL database creation
+cannot share that transaction. After a partial failure, stop and inspect the
+specific new roles/databases before completing provisioning manually; rerunning
+`init` refuses existing names and never drops, reassigns, or repairs them.
 
-   Continue only when the build succeeds. This command verifies that the
-   Toolbox checkout is clean, its remote is the expected repository, and its
-   HEAD matches the pushed branch. It also verifies the application's remote
-   SHA and builds a separate immutable source checkout. The application branch
-   defaults to `feat/toolbox-self-hosting`; pass `--branch` to both release
-   commands when selecting another branch.
-4. From that same verified Toolbox checkout, start only the dedicated database
-   with the exact image ID produced by the successful build. Keep the checkout
-   and selected commit unchanged between these commands:
+Prepare and test the exact reviewed application image before the maintenance
+window so the final heartbeat build can reuse its Docker layers. Rehearsal
+restores must use separately approved disposable databases, not the final target.
+The final import must be a fresh production Neon snapshot, never pilot data.
+Freeze cloud writes, stop cloud scheduled work, and drain/reconcile pending
+Workflow/provider effects before taking that final snapshot. Preserve cloud data
+and old deployments during verification.
 
-   ```sh
-   BULLY_BOOTSTRAP_IMAGE="$(docker image inspect --format '{{.Id}}' "bully-pulpit-local:$BULLY_APP_COMMIT")"
-   BULLY_RUNTIME_DIR=/Users/philip/data/bully-pulpit-local \
-     BULLY_IMAGE="$BULLY_BOOTSTRAP_IMAGE" \
-     docker compose -f deployments/bully-pulpit/compose.yml up -d --wait --no-deps postgres
-   ```
+Provision the explicit production URL privately as
+`secrets/source-database.json` (`{"url":"<production-Neon-URL>"}`, mode 0600).
+Do not use a development environment fallback. Then run:
 
-   The selected Compose file pins PostgreSQL 17 and its dedicated data directory.
-   `--no-deps postgres` starts only this service. Keep an existing healthy
-   dedicated database; do not recreate its data to repeat the bootstrap.
-5. Initialize the dedicated roles/databases, then copy the production Neon
-   database. Before `copy`, provision the explicit production connection URL as
-   `secrets/source-database.json` under the runtime directory, containing
-   `{"url":"<production-Neon-URL>"}` with mode0600. `secrets.py` renders the local
-   runtime credentials; it does not provision this source credential. Obtain
-   the source from the production secret, never a development database or an
-   environment-file fallback, and keep its value out of shell history/output.
+```sh
+python3 deployments/bully-pulpit/database.py copy
+```
 
-   ```sh
-   python3 deployments/bully-pulpit/database.py init
-   python3 deployments/bully-pulpit/database.py copy
-   ```
+Copy refuses an occupied target, takes one read-only source snapshot, saves a
+private custom-format backup, restores only the app database transactionally,
+and compares every application table count with that same snapshot. The success
+record includes the source archive SHA256. It excludes provider Workflow schemas;
+the new Workflow database starts fresh. Cloud Workflow state requires draining
+or explicit reconciliation, not a blind retry of already accepted sends.
 
-   Continue only after `copy` reports `verified: true` and writes
-   `/Users/philip/data/bully-pulpit-local/database-copy.json`. The copy refuses
-   an occupied target and verifies every table count against the exported source
-   snapshot. A missing source credential blocks this step and the release.
-   After a verified initial copy, skip this copy step for subsequent releases.
-6. Apply the same reviewed application commit:
+The managed cluster's existing daily `pg_dumpall` S3 backup automatically includes
+both new databases and roles. The release helper additionally backs up these two
+databases before migrations. Run the documented forced Toolbox backup and an
+isolated restore check after migration; an upload success is not a restore test.
 
-   ```sh
-   python3 deployments/bully-pulpit/deploy.py --commit "$BULLY_APP_COMMIT" --apply
-   ```
+## Enable, verify, and activate
 
-   The command requires the verified copy marker, freezes the selected Compose
-   and proxy configuration, backs up both local databases, applies migrations,
-   bootstraps the pinned Workflow backend, and starts this Compose project.
-7. Verify the real homepage, a photo, search, optimized images, admin rejection,
-   missing bot proof rejection, and Workflow smoke/restart behavior at the local
-   proxy using `Host: bully-pulpit.contraption.co`.
-8. Use Cloudflare MCP to fetch the current remote tunnel configuration, preserve
-   unrelated rules, and change only this hostname to `http://127.0.0.1:4244` with
-   a preceding `^/\.well-known/workflow`403 rule. Keep `config.yml` consistent.
-   Verify the public site and that Vercel/Postcard remain healthy.
+Use the SHA256 from the verified `database-copy.json`, without printing secrets:
 
-`deploy.log` is private. `deployment.json` records the app SHA, infrastructure
-SHA, image and frozen Compose path; `previous-deployment.json` preserves the
-last release. For application rollback use that exact prior image and Compose
-file with the same runtime directory. Do not delete volumes or restore an older
-database merely because an image failed. Migrations must remain additive.
+```sh
+python3 deployments/bully-pulpit/deploy.py enable --copy-sha256 <verified-source-sha256>
+```
 
-## Parallel boundaries
+The next heartbeat builds from the verified application commit with public build
+arguments, preserves the exact image ID and frozen Compose/proxy/scheduler files,
+runs additive app and Workflow migrations, starts the containers and waits for
+health. Only then is deployment success recorded. The app remains parallel.
+Verify the real homepage, articles/photos, search, optimized images, signup and
+OTP, account/admin authorization, Checkout/download ownership, and delivery-free
+Workflow sleep/restart recovery. Verify the local proxy using the production Host
+header while public traffic still follows the reviewed maintenance plan.
 
-`APP_RUNTIME=toolbox`, `NODE_ENV=production`, `DEPLOYMENT_ROLE=parallel` and the
-explicit `APP_URL` identify this instance. No local scheduler is installed.
-Bulk newsletters, retries, morning reports, subscriber backups sent by email,
-catalog sync, click-to-call and incoming phone/provider callbacks are refused
-before claims or external effects. This prevents an old copied audience from
-receiving messages after a primary-site opt-out. OTP, test sends, direct admin
-SMS, Checkout and billing are real operations. Changes to the copied application
-database do not replicate back to Neon.
+After the final copy and local checks, with cloud writers and schedules stopped:
 
-The worker calls `http://127.0.0.1:3000` inside its container. The public proxy
-denies the normalized Workflow prefix; Cloudflare's regex alone does not handle
-all encoded or dot-segment forms. No request header bypasses this restriction.
-Only one deployed app version owns the workflow database. The Postgres adapter
-does not automatically route old runs to compatible older code. Preserve
-in-flight compatibility or drain before upgrading. A durable sleep recovery
-probe is available; it sends no mail/SMS. An interrupted active step may wait for
-its ownership lease, so a sleep recovery test does not promise instant recovery
-of every provider call.
+```sh
+python3 deployments/bully-pulpit/deploy.py activate --copy-sha256 <verified-source-sha256>
+```
 
-## Vercel dependency audit
+Change the canonical vault ENV to `DEPLOYMENT_ROLE=primary` and refresh that
+specific item in Toolbox's one-hour credential cache through the documented
+operator environment. The normal heartbeat recreates the app and scheduler with
+the role change and performs health checks. Use Cloudflare MCP to back up and
+patch current remote tunnel ingress and DNS for the production host; preserve
+unrelated rules and Access settings. Route `www.philipithomas.com` and all three
+aliases (`philipithomas.com`, `ilic.nyc`, `www.ilic.nyc`) to the proxy on port
+4244. Preserve each incoming Host header; an override to the canonical host would
+skip the alias redirects. Do not use the old port-3005 redirector for these aliases:
+it discards article paths and query strings. Keep `config.yml` consistent after
+the reviewed route change, then verify alias status/Location with a non-root path
+and query, public flows, and `/api/health`.
 
-| Capability | Toolbox implementation |
+`deployment.json` contains the healthy image/configuration; the preceding healthy
+record is saved to `previous-deployment.json`. Image IDs have persistent unique
+tags. For application rollback, pause automatic updates and restore the previous
+record's Compose wrapper and exact image without restoring an older database.
+The migration contract remains additive. Do not re-enable cloud writers against
+a stale database after local writes begin; a reverse data migration is a separate
+operation. Never use `down -v` or delete the old pilot while validating this move.
+
+## Scheduled work
+
+`scheduler.py` preserves four UTC schedules:
+
+| Route | Schedule |
 | --- | --- |
-| Next.js hosting and image optimization | Locked Docker image and `next start` |
-| Neon business database | Consistent copy into dedicated local PostgreSQL |
-| Workflow jobs | Existing pinned SDK with pinned Postgres world |
-| BotID | Production Cloudflare Turnstile, hostname/action verification |
-| Vercel Firewall rate limits | Atomic PostgreSQL counters; unavailable checks fail closed |
-| Analytics and Speed Insights | Disabled on Toolbox |
-| Vercel Cron | Remains primary on Vercel; local calls paused |
-| OIDC credentials | Explicit production API credentials from 1Password |
-| Private photo Blob and AI Gateway | Intentionally retained external services |
-| Google sign-in | Enable only after authorizing the new OAuth origin; OTP works independently |
+| suppression-sync | `*/15 * * * *` |
+| bell-retention | `17 10 * * *` |
+| subscriber-backup | `0 11 1 * *` |
+| morning-report | `*/15 11,12 * * *` |
 
-The parallel hostname is public and has no Cloudflare Access application.
-Subscriber/admin routes still enforce application authorization. Every response
-has a noindex header. The production Turnstile widget is restricted to this
-hostname; no zone-wide security settings are changed.
+The scheduler does nothing unless its role is primary. A persistent SQLite ledger
+under `scheduler/` transactionally claims each route and UTC minute before its
+HTTP request. Multiple tickers and restarts cannot repeat that interval. Failed,
+interrupted or uncertain requests are not automatically retried in the same
+interval, particularly the monthly subscriber email. This provides at-most-once
+attempts, not exactly-once external delivery. Morning report keeps its existing
+application deduplication and same-morning catch-up. Missed intervals after a
+restart are recorded rather than replayed. Failed/missed attempts and stale
+heartbeats make the scheduler container unhealthy until a later successful
+interval or a reviewed repair. Logs include only route, minute, outcome and HTTP
+status; no response bodies or credentials.
 
-## Checks
+## Development checks
 
-Run the normal Toolbox unit tests plus
-`python3 -m unittest discover -s deployments/bully-pulpit -p 'test_*.py'`.
-The proxy fixture is opt-in (`python3 deployments/bully-pulpit/test_proxy.py`):
-it uses disposable containers, an ephemeral loopback port and no credentials.
-It never joins production networks or mounts production data.
+Use the separate Toolbox development clone. Run the normal Ruby suite and:
+
+```sh
+python3 -m unittest discover -s deployments/bully-pulpit -p 'test_*.py'
+python3 deployments/bully-pulpit/test_proxy.py
+```
+
+The second command is an opt-in isolated nginx test with unique disposable
+containers, an ephemeral loopback port, and no production networks/data/secrets.
+Do not run deployment scripts against real services to test code changes.

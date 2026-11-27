@@ -153,6 +153,29 @@ The toolbox relies on 1Password CLI for secure credential storage:
 
 For detailed setup instructions, follow the [official 1Password CLI guide](https://developer.1password.com/docs/cli/get-started/).
 
+### Service account request limits
+
+The heartbeat runs every minute, but it does not need to retrieve unchanged secrets
+that often. With `OP_SERVICE_ACCOUNT_TOKEN` set, Toolbox caches successful field
+reads and a successful authentication check for one hour in
+`.runtime/one-password/`. The directory has mode `0700` and its files have mode
+`0600`; the cache contains plaintext secrets and must remain private and outside
+Git and Docker build contexts. Entries are scoped to the token, vault, backend,
+item, and field. The token itself is not saved in this cache. Interactive CLI
+sign-in without a service account remains uncached.
+
+Secret changes and service account revocation can take up to one hour to reach
+Toolbox. An expired entry must be refreshed successfully before use; authentication,
+permission, and rate-limit errors do not fall back to expired credentials. The
+cache cannot populate until 1Password accepts the first request.
+
+For an authorized credential rotation, run the production heartbeat with
+`TOOLBOX_OP_REFRESH=1` in the usual service-account environment. This bypasses fresh
+entries and replaces them only after successful retrieval. A failed refresh
+invalidates that entry. `TOOLBOX_OP_CACHE=0` disables cache reads and writes for a
+run; leaving it disabled for scheduled runs can exhaust the daily request quota.
+Keep the normal production checkout and intent guards in place for these runs.
+
 ## Setting up Cloudflare Tunnel
 
 Cloudflare Tunnel provides a secure way to expose your home server to the internet without opening ports. For a detailed guide on setting up Cloudflare Tunnel on a Mac, follow [Sam Rhea's excellent guide](https://web.archive.org/web/20241113053641/https://blog.samrhea.com/posts/2021/zero-trust-mac-browser/).
@@ -220,6 +243,158 @@ GIT_SERVICES = [
   }
 ]
 ```
+
+### Manual
+
+Manual runs at `https://manual.ilic.nyc` from the `philipithomas/manual` repository's
+`main` branch. Toolbox builds the `tools` and `runner` Dockerfile targets as
+`manual-migrate` and `manual-app` inside a temporary snapshot of the verified
+release. Compose uses those local images, runs migrations and the idempotent
+seed, then starts the app on `127.0.0.1:3007`. The app and migration containers
+join the existing `toolbox_network`; no additional PostgreSQL server is created.
+
+The `ENV` field of the `manual` item in the configured 1Password vault contains
+the multiline production credentials and application settings. Toolbox writes
+it to Manual's ignored `.env` with owner-only permissions. Compose parses the dotenv values, including
+quoted values; do not split this field into Docker build arguments. Set
+`DATABASE_URL` to the existing database connection string, using `postgres` as
+the hostname when targeting Toolbox's PostgreSQL container. The database itself
+must exist before deployment. The remaining variables are documented in Manual's
+`.env.production.example` and README. Secrets are supplied only at runtime.
+
+The local `config.yml` records the `manual.ilic.nyc` route to port 3007. Cloudflare
+manages this tunnel's active ingress remotely, so the corresponding DNS and
+remote ingress entry must also be configured while preserving all existing
+routes. Verify the public sign-in page and the application flow after deployment,
+as well as the app's `/api/health` endpoint.
+
+#### Bedroom air quality
+
+Toolbox supplies the bedroom Awair's nonsecret LAN settings through Manual's
+`app.environment` Compose override in `config.rb`:
+
+```text
+AWAIR_LOCAL_URL=http://awair-elem-1425e2.local
+AWAIR_DEVICE_MAC=70:88:6B:14:25:E2
+```
+
+These two deployment settings take precedence over the 1Password `ENV` field;
+do not duplicate them there. The hostname follows the device across DHCP address
+changes, and the MAC check prevents collecting readings from another device.
+Enable the Awair's Local API in its app. Manual connects from Docker using IPv4,
+checks device identity, and collects readings every five minutes. No cloud API
+key, new port mapping, or firewall rule is required. Changing these settings in
+`config.rb` causes the normal heartbeat to recreate Manual's containers and
+wait for health before recording the deployment. Other credentials stay in
+1Password.
+
+#### Hue Bridge
+
+Manual's `app.environment` override in `config.rb` supplies these nonsecret
+settings for the local Hue Bridge:
+
+```text
+HUE_BRIDGE_URL=https://0017886136a4.local
+HUE_BRIDGE_ID=001788FFFE6136A4
+```
+
+Keep `HUE_APPLICATION_KEY` only in the `manual` 1Password item's multiline `ENV`
+field. Pair a dedicated application key through the Bridge's physical link
+button; never commit the key or put it in Docker build arguments. The address
+and identity above take precedence over `ENV`. Manual must verify HTTPS against
+the Hue CA and the exact Bridge identity. The integration reads light status;
+these settings do not authorize changing lights or HomeKit pairing.
+
+After an authorized key update, Toolbox's one-hour 1Password cache may delay
+activation. An authorized operator can refresh only `manual` / `ENV` through
+`Core::OnePassword.get_item` with `TOOLBOX_OP_REFRESH=1` in the existing production
+service-account environment. Never print the returned field. The next normal
+heartbeat detects the changed dotenv bytes, recreates Manual's containers, and
+waits for health even if the application commit has not changed. Do not edit the
+generated `.env` or disable the cache globally.
+
+#### Retired Find My bridge
+
+Manual no longer reads Find My. Its calendar locations describe plans only.
+The next normal heartbeat unloads only
+`co.contraption.toolbox.manual-location`, removes its LaunchAgent plist, and
+removes `.runtime/manual-location`, including the old shared key and native
+reader. Cleanup is idempotent and leaves every other service untouched. If
+unloading fails, it retains the files and retries on the next heartbeat.
+
+The old `MANUAL_LOCATION_BRIDGE_URL` and `MANUAL_LOCATION_BRIDGE_KEY` entries can
+be removed from the `manual` 1Password item's multiline `ENV` field. Manual no
+longer reads them. Toolbox does not modify the source item or macOS Accessibility
+settings; the existing Ruby interpreter may still be used by other applications.
+
+### Bully Pulpit migration
+
+The staged production integration follows the ordinary heartbeat and uses a
+separate app deployment checkout plus two databases in the existing PostgreSQL
+container. It remains disabled until the final verified cloud copy is explicitly
+enabled; primary scheduled work has a separate activation gate. See
+[the deployment runbook](deployments/bully-pulpit/README.md) for credentials,
+copy verification, rollout, durable scheduling and rollback. Keep the old pilot
+and its database intact during migration.
+
+### PostgreSQL backups, including Manual
+
+Manual's production `DATABASE_URL` points to the `manual` database in Toolbox's
+existing `postgres` container. The enabled `postgres_backup` script runs
+`pg_dumpall` against that entire cluster, so it includes Manual, Postcard, the
+other databases, and cluster roles. Manual does not need a second backup job or
+another copy of its connection string. If `DATABASE_URL` moves to a different
+PostgreSQL server, this coverage must be updated before the move.
+
+The heartbeat checks the job every minute. A successful backup starts the next
+24-hour interval; a failed export or upload does not advance the success marker.
+The export uses pipeline failure propagation, an owner-only temporary file, and
+a complete gzip integrity check that rejects empty or truncated exports before
+upload. PostgreSQL provides each database's consistent dump snapshot; this is
+not one atomic snapshot across every database in the cluster.
+
+Backups use the existing `toolbox` 1Password item's `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `S3_BUCKET` fields. Objects have the key
+`YYYY-MM-DD/postgres-YYYYMMDDTHHMMSSZ.sql.gz`, with the directory date in
+`America/New_York` and the filename timestamp in UTC. The script does not delete
+remote snapshots or change bucket lifecycle rules. Retention is governed by any
+existing S3 lifecycle configuration; inspect it with an authorized account
+rather than assuming the backup writer can read it. Preserve existing history.
+
+`postgres_backup.last_success.txt` records the last completed upload in UTC.
+`postgres_backup.lock.txt` prevents concurrent backups; an active lock also
+blocks a forced run. Locks older than one hour follow the existing stale-lock
+recovery behavior. Failed and partial exports are removed, and a successful
+upload removes the local temporary dump.
+
+For an explicitly authorized snapshot after a migration or import, run only the
+backup entrypoint from the clean, verified production checkout, with the same
+Ruby and secret environment as the heartbeat:
+
+```sh
+cd ~/code/toolbox
+ruby scripts/postgres_backup.rb --production --force
+```
+
+`--force` skips only the 24-hour interval. It does not bypass the lock or the
+production path, clean `main`, and `origin/main` checks. Omit `--force` to retain
+the normal interval. This command does not deploy applications or restart the
+tunnel. Do not print the LaunchAgent environment or put credentials in command
+arguments to run it.
+
+To verify recovery, use credentials authorized to download the snapshot and a
+private temporary directory. Check the complete gzip, then restore the cluster
+dump into an isolated PostgreSQL instance with the matching major version and
+required extensions, including pgvector. Verify Manual's migrations, pages,
+revisions, accounts, and upload references there. Export just the `manual`
+database from that instance for a separately reviewed application restore. Do
+not pipe the cluster dump into the live server: it also contains Postcard and
+other applications. A successful upload and gzip check do not substitute for a
+restore test; the backup writer may have no download permission.
+
+This job backs up database records, including attachment metadata. Uploaded
+image and PDF bytes remain in Manual's separate private S3 bucket; this database
+job does not make a second copy of those objects.
 
 ## Heartbeat script (auto-updates)
 

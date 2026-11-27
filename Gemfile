@@ -1,6 +1,6 @@
 source 'https://rubygems.org'
 
-# Only the dashboard uses these gems. The heartbeat remains stdlib-only.
+# Native HTTP services use these gems. The heartbeat remains stdlib-only.
 gem 'jwt', '~> 3.3.0'
 gem 'webrick', '~> 1.9.2'
 

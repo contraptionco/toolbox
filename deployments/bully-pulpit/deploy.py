@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Explicit parallel release from a verified remote commit, never a dev tree."""
+"""Prepare a verified Toolbox release; activate only after the final cloud copy."""
 import argparse
 import datetime
 import fcntl
+import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,34 +13,31 @@ import shutil
 import subprocess
 import sys
 
-ROOT = Path('/Users/philip/data/bully-pulpit-local')
+ROOT = Path('/Users/philip/data/bully-pulpit')
 HERE = Path(__file__).resolve().parent
-REPOSITORY = 'git@github.com:philipithomas/bully-pulpit.git'
-PUBLIC_BUILD_KEYS = ('NEXT_PUBLIC_TURNSTILE_SITE_KEY',
+PUBLIC_BUILD_KEYS = ('NEXT_PUBLIC_TURNSTILE_SITE_KEY', 'NEXT_PUBLIC_GOOGLE_CLIENT_ID',
                      'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY', 'PHONE_NUMBER')
+SPEC = importlib.util.spec_from_file_location('bully_secret_rules', HERE / 'secrets.py')
+secret_rules = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(secret_rules)
 
 
-def command(args, *, env=None, cwd=None, log=None):
+def command(args, *, env=None, cwd=None, log=None, timeout=3600):
     result = subprocess.run(args, env=env, cwd=cwd, stdout=log or subprocess.PIPE,
-                            stderr=log or subprocess.PIPE, text=True)
+                            stderr=log or subprocess.PIPE, text=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f'{args[0]} failed; inspect the private deployment log')
     return result.stdout or ''
 
 
 def read_env(path):
-    if path.stat().st_mode & 0o077:
-        raise RuntimeError('Runtime environment must have mode 0600')
-    values = {}
-    for line in path.read_text().splitlines():
-        if line and not line.startswith('#'):
-            key, value = line.split('=', 1)
-            values[key] = value
-    return values
+    if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o077:
+        raise RuntimeError('Runtime environment must be a regular private file (0600)')
+    return secret_rules.parse_env(path.read_text())
 
 
 def acquire_release_lock(root):
-    fd = os.open(root / 'deploy.lock', os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(root / 'deploy.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     lock = os.fdopen(fd, 'w')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -49,126 +48,149 @@ def acquire_release_lock(root):
 
 
 def atomic_record(path, data):
-    temporary = path.with_suffix('.tmp')
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w') as file:
-        file.write(json.dumps(data, indent=2) + '\n')
-        file.flush()
-        os.fsync(file.fileno())
-    os.replace(temporary, path)
+    secret_rules.write_private(path, json.dumps(data, indent=2) + '\n')
 
 
-def verified_ref(repository, ref, sha):
-    if not re.fullmatch(r'[0-9a-f]{40}', sha):
-        raise RuntimeError('A full, explicitly selected commit is required')
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', ref) or '..' in ref:
-        raise RuntimeError('Invalid branch name')
-    remote = command(['git', 'ls-remote', '--exit-code', repository,
-                      f'refs/heads/{ref}']).split()
-    if not remote or remote[0] != sha:
-        raise RuntimeError('Selected commit is not the current pushed branch head')
+def copy_identity(root):
+    marker = root / 'database-copy.json'
+    if marker.is_symlink() or not marker.is_file():
+        raise RuntimeError('A verified final cloud database copy is required')
+    report = json.loads(marker.read_text())
+    if report.get('verified') is not True or report.get('application_database') != 'bully_pulpit':
+        raise RuntimeError('A verified final cloud database copy is required')
+    digest = report.get('source_sha256', '')
+    if not re.fullmatch(r'[a-f0-9]{64}', digest):
+        raise RuntimeError('Database copy is missing its source archive identity')
+    return digest
+
+
+def validate_activation(root, env):
+    digest = copy_identity(root)
+    enabled = json.loads((root / 'enabled.json').read_text())
+    if enabled.get('copy_sha256') != digest:
+        raise RuntimeError('Enable marker does not match the verified cloud copy')
+    if env['DEPLOYMENT_ROLE'] == 'primary':
+        marker = root / 'primary.json'
+        if not marker.is_file() or json.loads(marker.read_text()).get('copy_sha256') != digest:
+            raise RuntimeError('Primary deployment needs the explicit final-copy activation marker')
+    return digest
+
+
+def freeze_files(directory, contents):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for name, content in contents.items():
+        path = directory / name
+        if path.exists() and path.read_text() != content:
+            raise RuntimeError('Immutable infrastructure release changed')
+        if not path.exists(): secret_rules.write_private(path, content)
+        # The unprivileged nginx UID must read its public configuration. The
+        # enclosing release directory remains private on the host.
+        if name in ('nginx.conf', 'scheduler.py'): path.chmod(0o644)
+
+
+def prepare(root=ROOT, source=None, environ=None):
+    environ = os.environ if environ is None else environ
+    source = Path.cwd() if source is None else Path(source)
+    sha = environ.get('TOOLBOX_RELEASE_SHA', '')
+    if not re.fullmatch(r'[a-f0-9]{40}', sha) or (source / '.git').exists():
+        raise RuntimeError('Build must use the verified Toolbox archive and full release SHA')
+    env_path = root / 'secrets/app.env'
+    if environ.get('TOOLBOX_RUNTIME_ENV') != str(env_path):
+        raise RuntimeError('Unexpected runtime environment path')
+    env = read_env(env_path)
+    secret_rules.validate(env, require_runtime=True)
+    digest = validate_activation(root, env)
+    if shutil.disk_usage(root).free < 20 * 1024**3:
+        raise RuntimeError('At least 20 GiB immediately free is required before release')
+    scheduler = root / 'scheduler'
+    scheduler.mkdir(mode=0o700, exist_ok=True)
+    secret_rules.write_private(root / 'secrets/scheduler.env',
+                               'DEPLOYMENT_ROLE=' + env['DEPLOYMENT_ROLE'] + '\nCRON_SECRET=' + env['CRON_SECRET'] + '\n')
+    contents = {name: (HERE / name).read_text() for name in ('compose.yml', 'nginx.conf', 'scheduler.py')}
+    public = {key: env[key] for key in PUBLIC_BUILD_KEYS if env.get(key)}
+    identity = hashlib.sha256(json.dumps({'sha': sha, 'files': contents, 'public': public}, sort_keys=True).encode()).hexdigest()
+    build_directory = root / 'builds' / identity
+    build_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    image_id_file = build_directory / 'image.id'
+    log_path = root / 'deploy.log'
+    if log_path.exists() and log_path.stat().st_size > 10 * 1024**2:
+        for index in (2, 1):
+            old = root / f'deploy.log.{index}'
+            if old.exists(): old.replace(root / f'deploy.log.{index + 1}')
+        log_path.replace(root / 'deploy.log.1')
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'a') as log:
+        build = ['docker', 'build', '--iidfile', str(image_id_file), '--tag',
+                 'bully-pulpit-production:' + identity[:20], '--label',
+                 'org.opencontainers.image.revision=' + sha, '--build-arg',
+                 'APP_URL=https://www.philipithomas.com']
+        for key, value in public.items(): build += ['--build-arg', key + '=' + value]
+        command(build + [str(source)], log=log)
+        image_id = image_id_file.read_text().strip()
+        if not re.fullmatch(r'sha256:[a-f0-9]{64}', image_id):
+            raise RuntimeError('Build did not produce an immutable image ID')
+        command(['docker', 'tag', image_id, 'bully-pulpit-production:' + sha[:12] + '-' + image_id[-12:]], log=log)
+        # Preserve both application and Workflow state before additive migrations.
+        command([sys.executable, str(HERE / 'database.py'), 'backup'], log=log)
+    infra = root / 'releases' / (identity + '-' + image_id[-12:])
+    release_env = '\n'.join([
+        'BULLY_RUNTIME_DIR=' + str(root), 'BULLY_IMAGE=' + image_id,
+        'BULLY_HOST_UID=' + str(os.getuid()), 'BULLY_HOST_GID=' + str(os.getgid()), ''])
+    freeze_files(infra, {**contents, 'release.env': release_env})
+    compose = {'name': 'bully-pulpit-production', 'include': [{
+        'path': str(infra / 'compose.yml'), 'project_directory': str(infra),
+        'env_file': str(infra / 'release.env'),
+    }]}
+    atomic_record(root / 'compose.json', compose)
+    atomic_record(root / 'pending-deployment.json', {
+        'application_sha': sha, 'image': image_id, 'infrastructure': str(infra),
+        'compose': compose, 'copy_sha256': digest, 'role': env['DEPLOYMENT_ROLE'],
+        'prepared_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    print('Prepared immutable Bully Pulpit release; Compose will apply migrations and verify readiness')
+
+
+def record(root=ROOT):
+    pending = json.loads((root / 'pending-deployment.json').read_text())
+    current = root / 'deployment.json'
+    if current.exists(): atomic_record(root / 'previous-deployment.json', json.loads(current.read_text()))
+    pending['ready_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    atomic_record(current, pending)
+    print('Recorded healthy Bully Pulpit deployment')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--commit', required=True)
-    parser.add_argument('--branch', default='feat/toolbox-self-hosting')
-    parser.add_argument('--build-only', action='store_true')
-    parser.add_argument('--apply', action='store_true')
+    parser.add_argument('operation', choices=('prepare', 'record', 'enable', 'activate'))
+    parser.add_argument('--copy-sha256')
     args = parser.parse_args()
-    if args.build_only == args.apply:
-        parser.error('Choose exactly one of --build-only or --apply')
-    release_lock = acquire_release_lock(ROOT)
-    verified_ref(REPOSITORY, args.branch, args.commit)
-    # The orchestration itself must also be reviewed/pushed and clean.
-    repo = HERE.parent.parent
-    if command(['git', 'status', '--porcelain'], cwd=repo).strip():
-        raise RuntimeError('Toolbox release checkout must be clean')
-    toolbox_sha = command(['git', 'rev-parse', 'HEAD'], cwd=repo).strip()
-    toolbox_branch = command(['git', 'branch', '--show-current'], cwd=repo).strip()
-    toolbox_remote = command(['git', 'remote', 'get-url', 'origin'], cwd=repo).strip()
-    if toolbox_remote != 'git@github.com:contraptionco/toolbox.git':
-        raise RuntimeError('Unexpected Toolbox source remote')
-    verified_ref(toolbox_remote, toolbox_branch, toolbox_sha)
-    if shutil.disk_usage(ROOT).free < 8 * 1024**3:
-        raise RuntimeError('At least 8 GiB physical free space is required')
-    app_env = read_env(ROOT / 'secrets/app.env')
-    if app_env.get('APP_RUNTIME') != 'toolbox' or app_env.get('DEPLOYMENT_ROLE') != 'parallel':
-        raise RuntimeError('This release tool only supports the parallel Toolbox deployment')
-    if not app_env.get('NEXT_PUBLIC_TURNSTILE_SITE_KEY'):
-        raise RuntimeError('Production Turnstile site key is required at build time')
-    if args.apply:
-        required = ('JWT_SECRET', 'BELL_IDENTITY_SECRET', 'CRON_SECRET',
-                    'TURNSTILE_SECRET_KEY', 'DATABASE_URL', 'WORKFLOW_POSTGRES_URL',
-                    'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'OPENAI_API_KEY',
-                    'AI_GATEWAY_API_KEY', 'PHOTO_ARCHIVE_READ_WRITE_TOKEN')
-        if any(not app_env.get(key) for key in required):
-            raise RuntimeError('Required production runtime credentials are missing')
-        if not app_env.get('STRIPE_SECRET_KEY', '').startswith(('sk_live_', 'rk_live_')):
-            raise RuntimeError('A live Stripe key is required; test keys are refused')
-        copy_report = ROOT / 'database-copy.json'
-        if not copy_report.exists() or not json.loads(copy_report.read_text()).get('verified'):
-            raise RuntimeError('Verified cloud database copy is required before release')
-    source = ROOT / 'releases' / args.commit
-    if not source.exists():
-        command(['git', 'clone', '--depth', '1', '--branch', args.branch, REPOSITORY, str(source)])
-    if command(['git', 'rev-parse', 'HEAD'], cwd=source).strip() != args.commit:
-        raise RuntimeError('Release checkout has a different commit')
-    if command(['git', 'status', '--porcelain'], cwd=source).strip():
-        raise RuntimeError('Release checkout has local changes')
-    if command(['git', 'ls-files', '--others', '--ignored', '--exclude-standard'], cwd=source).strip():
-        raise RuntimeError('Release checkout contains ignored build inputs')
-    image = f'bully-pulpit-local:{args.commit}'
-    log_path = ROOT / 'deploy.log'
-    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    with os.fdopen(fd, 'a') as log:
-        build = ['docker', 'build', '--tag', image, '--label',
-                 f'org.opencontainers.image.revision={args.commit}', '--build-arg',
-                 'APP_URL=https://bully-pulpit.contraption.co']
-        for key in PUBLIC_BUILD_KEYS:
-            if app_env.get(key): build += ['--build-arg', f'{key}={app_env[key]}']
-        command(build + [str(source)], log=log)
-        image_id = command(['docker', 'image', 'inspect', '--format', '{{.Id}}', image]).strip()
-        if not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id):
-            raise RuntimeError('Unable to verify the built image identity')
-        if args.build_only:
-            print('Built verified image:', image)
-            return
-        # Freeze the proxy/Compose inputs alongside the app release for rollback.
-        infra = ROOT / 'releases' / f'infra-{toolbox_sha}'
-        infra.mkdir(exist_ok=True, mode=0o700)
-        for filename in ('compose.yml', 'nginx.conf'):
-            target = infra / filename
-            content = (HERE / filename).read_bytes()
-            if target.exists() and target.read_bytes() != content:
-                raise RuntimeError('Immutable infrastructure release changed')
-            target.write_bytes(content)
-        env = {**os.environ, 'BULLY_RUNTIME_DIR': str(ROOT), 'BULLY_IMAGE': image_id}
-        compose = ['docker', 'compose', '-f', str(infra / 'compose.yml')]
-        command(compose + ['up', '-d', '--wait', 'postgres'], env=env, log=log)
-        state = ROOT / 'deployment.json'
-        if state.exists():
-            atomic_record(ROOT / 'previous-deployment.json', json.loads(state.read_text()))
-        command([sys.executable, str(HERE / 'database.py'), 'backup'], log=log)
-        # Migrations are additive, and these scripts reject nonlocal DB targets.
-        command(compose + ['run', '--rm', '--no-deps', 'app', 'corepack', 'pnpm', 'db:migrate'], env=env, log=log)
-        command(compose + ['run', '--rm', '--no-deps', 'app', 'corepack', 'pnpm', 'workflow:bootstrap'], env=env, log=log)
-        # One application version owns this workflow database. Compose stops
-        # the old named container before starting its replacement.
-        command(compose + ['up', '-d', '--wait', '--wait-timeout', '180', '--no-build', 'app', 'proxy'], env=env, log=log)
-    record = {'commit': args.commit, 'toolbox_commit': toolbox_sha, 'image': image_id, 'image_tag': image,
-              'compose': str(infra / 'compose.yml'), 'released_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
-    atomic_record(ROOT / 'deployment.json', record)
-    release_lock.close()
-    print('Local release ready:', args.commit)
-    print('Origin: http://127.0.0.1:4244 (Host: bully-pulpit.contraption.co)')
-    print('Verify origin before changing Cloudflare ingress. Vercel is unchanged.')
+    if HERE.parent.parent != Path('/Users/philip/code/toolbox'):
+        raise RuntimeError('Deployment commands must run from the production Toolbox checkout')
+    if command(['git', 'status', '--porcelain'], cwd=HERE.parent.parent).strip():
+        raise RuntimeError('Production Toolbox checkout must be clean')
+    if command(['git', 'branch', '--show-current'], cwd=HERE.parent.parent).strip() != 'main':
+        raise RuntimeError('Production Toolbox checkout must be on main')
+    repository = HERE.parent.parent
+    if command(['git', 'remote', 'get-url', 'origin'], cwd=repository).strip() != 'git@github.com:contraptionco/toolbox.git':
+        raise RuntimeError('Unexpected production Toolbox remote')
+    head = command(['git', 'rev-parse', 'HEAD'], cwd=repository).strip()
+    remote = command(['git', 'ls-remote', '--exit-code', 'origin', 'refs/heads/main'], cwd=repository, timeout=120).split()
+    if not remote or remote[0] != head:
+        raise RuntimeError('Production Toolbox must match the current pushed main commit')
+    with acquire_release_lock(ROOT):
+        if args.operation == 'prepare': prepare()
+        elif args.operation == 'record': record()
+        else:
+            digest = copy_identity(ROOT)
+            if args.copy_sha256 != digest:
+                raise RuntimeError('Supply the exact verified final source archive SHA256')
+            marker = ROOT / ('enabled.json' if args.operation == 'enable' else 'primary.json')
+            atomic_record(marker, {'copy_sha256': digest, 'created_at': datetime.datetime.now(datetime.timezone.utc).isoformat()})
+            print('Recorded explicit deployment ' + args.operation + ' marker')
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except (RuntimeError, OSError, ValueError) as error:
-        # Do not forward subprocess output or environment values.
-        print(f'Release refused: {error}', file=sys.stderr)
+    try: main()
+    except (RuntimeError, ValueError, KeyError, OSError, subprocess.SubprocessError):
+        print('Deployment refused; check the verified release, private configuration and copy/activation records', file=sys.stderr)
         sys.exit(1)

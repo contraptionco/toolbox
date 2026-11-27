@@ -17,7 +17,7 @@ import uuid
 
 
 HERE = Path(__file__).resolve().parent
-HOST = "bully-pulpit.contraption.co"
+HOST = "www.philipithomas.com"
 IMAGE = re.search(
     r"^\s*image:\s*(nginxinc/nginx-unprivileged:[^\s]+)\s*$",
     (HERE / "compose.yml").read_text(),
@@ -146,17 +146,44 @@ http {
             assert observed["host"] == HOST
             assert observed["xff"] == observed["real_ip"] == "203.0.113.7"
             assert observed["proto"] == "https" and observed["forwarded"] == ""
-            assert headers["X-Robots-Tag"] == "noindex, nofollow, noarchive"
+            assert headers["X-Robots-Tag"] == "index"
             checks += 6
             _, _, body = request(headers={"X-Forwarded-For": "198.51.100.99"})
             assert json.loads(body)["xff"] == ""
             checks += 1
 
-            for host in ["localhost", "www.philipithomas.com", HOST + ".evil.test", HOST + ":8080"]:
+            for host in ["localhost", "bully-pulpit.contraption.co", HOST + ".evil.test", HOST + ":8080"]:
                 assert request(headers={"Host": host})[0] == 444, host
                 checks += 1
             assert request("http://" + HOST + "/", {"Host": "evil.test"})[0] == 444
             checks += 1
+
+            # Alias redirects preserve method, raw path and query without ever
+            # deriving the destination origin from a caller-controlled header.
+            for alias, expected_status in [("philipithomas.com", 308), ("ilic.nyc", 307), ("www.ilic.nyc", 307)]:
+                for target in ["/", "/article/chapter?from=alias&value=a%2Fb",
+                               "/one%2Ftwo?q=space%20value&next=https%3A%2F%2Fevil.test%2F",
+                               "//evil.test/path?x=1"]:
+                    for method in ["GET", "HEAD", "POST"]:
+                        status, headers, _ = request(target, {
+                            "Host": alias,
+                            "X-Forwarded-Host": "evil.test",
+                            "X-Forwarded-Proto": "http",
+                            "Forwarded": "host=evil.test;proto=http",
+                        }, method)
+                        assert status == expected_status, (alias, target, method, status)
+                        assert headers["Location"] == "https://" + HOST + target
+                        checks += 2
+                target = "/article?source=absolute%2Fform"
+                status, headers, _ = request("http://" + alias + target, {"Host": alias})
+                assert status == expected_status and headers["Location"] == "https://" + HOST + target
+                checks += 1
+                assert request("http://" + alias + "/", {"Host": "evil.test"})[0] == 444
+                assert request("http://evil.test/", {"Host": alias})[0] == 444
+                checks += 2
+                for invalid_host in [alias + ".evil.test", alias + ":8080"]:
+                    assert request("/article?x=1", {"Host": invalid_host})[0] == 444
+                    checks += 1
 
             for path in [
                 "/.well-known/workflow",
@@ -173,7 +200,7 @@ http {
                 for method in ["GET", "POST"]:
                     status, headers, _ = request(path, {"X-Workflow-Internal": "true"}, method)
                     assert status == 403, (method, path, status)
-                    assert "noindex" in headers["X-Robots-Tag"]
+                    assert headers.get("X-Robots-Tag") != "noindex, nofollow, noarchive"
                     checks += 2
 
             for path in [
@@ -185,7 +212,7 @@ http {
             ]:
                 status, headers, _ = request(path)
                 assert status == 400, (path, status)
-                assert "noindex" in headers["X-Robots-Tag"]
+                assert headers.get("X-Robots-Tag") != "noindex, nofollow, noarchive"
                 checks += 2
 
             # Encoded query values are ordinary application data, not route paths.
@@ -197,7 +224,7 @@ http {
                 method="POST",
                 body=b"",
             )
-            assert status == 413 and "noindex" in headers["X-Robots-Tag"]
+            assert status == 413
             checks += 3
 
             # The upstream takes several seconds to send its body. The client
