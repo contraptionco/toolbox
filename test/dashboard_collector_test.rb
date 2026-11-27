@@ -99,6 +99,93 @@ class DashboardCollectorTest < Minitest::Test
     assert @collector.send(:configured_applications).any? { |item| item[:name] == 'analytics' }
   end
 
+  def test_runtime_capability_changes_refresh_without_restarting_the_collector
+    collector = bully_pulpit_collector
+    stub_bully_inventory
+    before = collector.snapshot
+    refute before[:containers].find { |row| row[:name] == 'bully-pulpit-production-analytics' }[:configured]
+    assert_includes before[:warnings], 'Running container bully-pulpit-production-analytics is not configured in Toolbox.'
+
+    write_bully_runtime
+    result = collector.snapshot
+    assert result[:containers].find { |row| row[:name] == 'bully-pulpit-production-analytics' }[:configured]
+    assert_equal 'running', result[:applications].find { |row| row[:name] == 'bully-pulpit-production-analytics' }[:status]
+    %w[bully-pulpit bully-pulpit-postgres bully-pulpit-proxy].each do |name|
+      assert_equal 'standby', result[:applications].find { |row| row[:name] == name }[:status]
+      refute_includes result[:warnings], "Configured application #{name} is not running."
+    end
+    assert_equal 'exited', result[:containers].find { |row| row[:name] == 'bully-pulpit' }[:state]
+    refute result[:warnings].any? { |warning| warning.include?('production-analytics') }
+    refute_includes JSON.generate(result), 'private-record-value'
+    assert_empty result[:errors]
+  end
+
+  def test_analytics_requires_current_recorded_capability_not_a_preserved_data_directory
+    collector = bully_pulpit_collector
+    stub_bully_inventory
+    write_bully_runtime
+    assert collector.snapshot[:containers].find { |row| row[:name] == 'bully-pulpit-production-analytics' }[:configured]
+    write_bully_runtime(analytics: false)
+    assert Dir.exist?(File.join(@bully_runtime, 'analytics'))
+    result = collector.snapshot
+    refute result[:applications].any? { |row| row[:name] == 'bully-pulpit-production-analytics' }
+    assert_includes result[:warnings], 'Running container bully-pulpit-production-analytics is not configured in Toolbox.'
+
+    write_bully_runtime
+    manifest = JSON.parse(File.read(File.join(@bully_runtime, 'compose.json')))
+    manifest['x-toolbox-required-services'].delete('analytics')
+    File.write(File.join(@bully_runtime, 'compose.json'), JSON.generate(manifest))
+    refute collector.snapshot[:containers].find { |row| row[:name] == 'bully-pulpit-production-analytics' }[:configured]
+  end
+
+  def test_primary_standby_does_not_hide_production_failures_or_running_unhealthy_pilot
+    collector = bully_pulpit_collector
+    write_bully_runtime
+    stub_bully_inventory(production: false, analytics: false)
+    result = collector.snapshot
+    assert_includes result[:warnings], 'Configured application bully-pulpit-production is not running.'
+    assert_includes result[:warnings], 'Configured application bully-pulpit-production-analytics is not running.'
+    assert_equal 'standby', result[:applications].find { |row| row[:name] == 'bully-pulpit' }[:status]
+
+    stub_bully_inventory(pilot_state: 'running', pilot_health: 'unhealthy')
+    result = collector.snapshot
+    assert_equal 'running', result[:applications].find { |row| row[:name] == 'bully-pulpit' }[:status]
+    assert_includes result[:warnings], 'Container bully-pulpit is unhealthy.'
+  end
+
+  def test_missing_malformed_or_mismatched_activation_never_suppresses_pilot_failures
+    collector = bully_pulpit_collector
+    stub_bully_inventory
+    mutations = [
+      -> { File.delete(File.join(@bully_runtime, 'primary.json')) },
+      -> { File.write(File.join(@bully_runtime, 'primary.json'), JSON.generate(copy_sha256: 'b' * 64)) },
+      -> { File.write(File.join(@bully_runtime, 'deployment.json'), '{') },
+      -> { File.write(File.join(@bully_runtime, 'deployment.json'), 'x' * 16_385) },
+      -> { File.write(File.join(@bully_runtime, 'database-copy.json'), JSON.generate(verified: false, application_database: 'bully_pulpit', source_sha256: 'a' * 64)) },
+      -> { File.write(File.join(@bully_runtime, 'enabled.json'), JSON.generate(copy_sha256: 'c' * 64)) },
+      -> { File.rename(File.join(@bully_runtime, 'primary.json'), File.join(@bully_runtime, 'outside.json')); File.symlink(File.join(@bully_runtime, 'outside.json'), File.join(@bully_runtime, 'primary.json')) },
+      -> { write_bully_runtime(role: 'parallel') }
+    ]
+    mutations.each do |mutate|
+      FileUtils.rm_f(File.join(@bully_runtime, 'primary.json'))
+      write_bully_runtime
+      mutate.call
+      result = collector.snapshot
+      assert_equal 'stopped', result[:applications].find { |row| row[:name] == 'bully-pulpit' }[:status]
+      assert_includes result[:warnings], 'Configured application bully-pulpit is not running.'
+    end
+  end
+
+  def test_activation_records_do_not_turn_failed_inventory_into_standby_or_running
+    collector = bully_pulpit_collector
+    write_bully_runtime
+    @runner.add(['docker', 'ps', '-a', '--no-trunc', '--format', Dashboard::Collector::PS_FORMAT], '', success: false)
+    result = collector.snapshot
+    assert result[:applications].select { |row| row[:type] == 'docker' }.all? { |row| row[:status] == 'unknown' }
+    assert_includes result[:errors], { source: 'Docker inventory', message: 'Temporarily unavailable' }
+    refute result[:warnings].any? { |warning| warning.include?('not running') }
+  end
+
   def test_container_metrics_use_only_safe_inspect_fields_and_flag_unconfigured_running
     result = @collector.snapshot
     postcard = result[:containers].find { |item| item[:name] == 'postcard' }
@@ -364,6 +451,50 @@ class DashboardCollectorTest < Minitest::Test
   end
 
   private
+
+  def bully_pulpit_collector
+    @bully_runtime = File.join(@directory, 'bully-runtime')
+    FileUtils.mkdir_p(@bully_runtime)
+    @config::GIT_SERVICES << {
+      name: 'bully-pulpit-production', use_compose: true,
+      compose_file: File.join(@bully_runtime, 'compose.json'),
+      enabled_if: File.join(@bully_runtime, 'enabled.json'),
+      compose_readiness_services: %w[app proxy scheduler], compose_optional_readiness_services: ['analytics'],
+      dashboard: { container_name: 'bully-pulpit-production' }
+    }
+    @config.const_set(:COMPOSE_APPLICATIONS, [
+      { name: 'bully-pulpit-pilot', containers: %w[bully-pulpit bully-pulpit-postgres bully-pulpit-proxy] },
+      { name: 'bully-pulpit-production-analytics', containers: ['bully-pulpit-production-analytics'], enabled_if: File.join(@bully_runtime, 'analytics') }
+    ])
+    Dashboard::Collector.new(repo_dir: @directory, config: @config, runner: @runner,
+      clock: -> { @now }, hostname: 'Mac mini', platform: 'arm64-darwin',
+      docker_disk_path: File.join(@directory, 'Docker.raw'))
+  end
+
+  def write_bully_runtime(analytics: true, role: 'primary')
+    FileUtils.mkdir_p(File.join(@bully_runtime, 'analytics'))
+    digest = 'a' * 64
+    manifest = { name: 'bully-pulpit-production', 'x-toolbox-required-services' => %w[app proxy scheduler] + (analytics ? ['analytics'] : []) }
+    records = {
+      'database-copy.json' => { verified: true, application_database: 'bully_pulpit', source_sha256: digest },
+      'enabled.json' => { copy_sha256: digest }, 'primary.json' => { copy_sha256: digest },
+      'compose.json' => manifest,
+      'deployment.json' => { copy_sha256: digest, role: role, ready_at: @now.iso8601, compose: manifest,
+        analytics_protocol: analytics ? 1 : nil, private_field: 'private-record-value' }
+    }
+    records.each { |name, value| File.write(File.join(@bully_runtime, name), JSON.generate(value)) }
+  end
+
+  def stub_bully_inventory(production: true, analytics: true, pilot_state: 'exited', pilot_health: 'none')
+    rows = []
+    rows << { id: POSTCARD_ID, name: 'bully-pulpit-production', image: 'fixture-production', state: 'running', status: 'Up' } if production
+    rows << { id: OTHER_ID, name: 'bully-pulpit-production-analytics', image: 'fixture-production', state: 'running', status: 'Up' } if analytics
+    rows << { id: EXITED_ID, name: 'bully-pulpit', image: 'fixture-pilot', state: pilot_state, status: pilot_state }
+    @runner.add(['docker', 'ps', '-a', '--no-trunc', '--format', Dashboard::Collector::PS_FORMAT], rows.map { |row| JSON.generate(row) }.join("\n"))
+    running = rows.select { |row| row[:state] == 'running' }
+    @runner.add(['docker', 'stats', '--no-stream', '--no-trunc', '--format', Dashboard::Collector::STATS_FORMAT, *running.map { |row| row[:id] }], '') unless running.empty?
+    @runner.add(['docker', 'inspect', '--format', Dashboard::Collector::INSPECT_FORMAT, *rows.map { |row| row[:id] }], JSON.generate(id: EXITED_ID, health: pilot_health))
+  end
 
   def compose_collector
     @config::GIT_SERVICES << {

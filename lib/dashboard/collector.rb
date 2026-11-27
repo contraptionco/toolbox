@@ -37,7 +37,6 @@ module Dashboard
       @docker_disk_path = docker_disk_path || File.join(@home_dir, 'Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw')
       @log_paths = { 'heartbeat' => File.join(@repo_dir, 'heartbeat.log'),
                      'tunnel' => File.join(@repo_dir, 'tunnel.log') }.freeze
-      @applications = configured_applications.freeze
       @one_shot_containers = configured_one_shot_containers.freeze
     end
 
@@ -49,13 +48,14 @@ module Dashboard
       collect(errors, 'host memory') { host[:memory] = memory_usage }
       collect(errors, 'host load') { host.merge!(system_usage) }
       collect(errors, 'Docker disk') { host[:docker_disk] = docker_disk }
-      inventory_result = collect(errors, 'Docker inventory') { inventory }
+      configured = configured_applications
+      inventory_result = collect(errors, 'Docker inventory') { inventory(configured) }
       containers = inventory_result || []
       if !containers.empty?
         collect(errors, 'container metrics') { add_stats(containers) }
         collect(errors, 'container state') { add_details(containers) }
       end
-      applications = @applications.map do |app|
+      applications = configured.map do |app|
         container = containers.find { |item| item[:name] == app[:container_name] }
         deployed = deployment_marker(app[:name]) if app[:type] == 'docker'
         app_status = if app[:status]
@@ -67,7 +67,7 @@ module Dashboard
                      elsif container && container[:state] == 'running'
                        'running'
                      else
-                       'stopped'
+                       app[:standby] ? 'standby' : 'stopped'
                      end
         app.merge(status: app_status, image: container&.dig(:image),
                   started_at: container&.dig(:started_at), commit: deployed).compact
@@ -125,6 +125,7 @@ module Dashboard
     private
 
     def configured_applications
+      bully_runtime = bully_pulpit_runtime
       direct = @config::DOCKER_SERVICES.map { |item| { name: item.fetch(:name), type: 'docker', container_name: item.fetch(:name), configured: true } }
       git = @config::GIT_SERVICES.filter_map do |item|
         container_name = if item[:container_config]
@@ -147,13 +148,62 @@ module Dashboard
       end
       host << { name: 'cloudflare-tunnel', type: 'host', configured: true } if @config.const_defined?(:TUNNEL_CONFIG) && @config::TUNNEL_CONFIG
       compose = @config.const_defined?(:COMPOSE_APPLICATIONS) ? @config::COMPOSE_APPLICATIONS.flat_map do |item|
-        next [] if item[:enabled_if] && !File.exist?(item[:enabled_if])
+        if item[:name] == 'bully-pulpit-production-analytics'
+          next [] unless bully_runtime[:analytics]
+        else
+          next [] if item[:enabled_if] && !File.exist?(item[:enabled_if])
+        end
 
         item.fetch(:containers).map do |name|
-          { name: name, type: 'docker', container_name: name, configured: true }
+          app = { name: name, type: 'docker', container_name: name, configured: true }
+          app[:standby] = true if item[:name] == 'bully-pulpit-pilot' && bully_runtime[:primary]
+          app
         end
       end : []
       direct + git + compose + host
+    end
+
+    # Interpret only non-secret release records from the configured runtime.
+    # These describe intended services/role, not current public route health.
+    def bully_pulpit_runtime
+      service = @config::GIT_SERVICES.find { |item| item[:name] == 'bully-pulpit-production' && item[:use_compose] }
+      return {} unless service && service[:compose_file].is_a?(String)
+
+      root = File.dirname(service[:compose_file])
+      copy = runtime_record(File.join(root, 'database-copy.json'))
+      enabled = runtime_record(File.join(root, 'enabled.json'))
+      deployed = runtime_record(File.join(root, 'deployment.json'))
+      current = runtime_record(service[:compose_file])
+      return {} unless copy && enabled && deployed && current
+      digest = copy['source_sha256']
+      return {} unless copy['verified'] == true && copy['application_database'] == 'bully_pulpit' &&
+                       digest.is_a?(String) && digest.match?(/\A[a-f0-9]{64}\z/) &&
+                       enabled['copy_sha256'] == digest && deployed['copy_sha256'] == digest &&
+                       %w[primary parallel].include?(deployed['role']) && safe_time(deployed['ready_at'])
+      baseline = service[:compose_readiness_services]
+      optional = service[:compose_optional_readiness_services] || []
+      recorded = deployed['compose']
+      return {} unless baseline.is_a?(Array) && optional.is_a?(Array) && recorded.is_a?(Hash)
+      manifests = [recorded, current]
+      requirements = manifests.map { |manifest| manifest.fetch('x-toolbox-required-services', baseline) }
+      return {} unless manifests.all? { |manifest| manifest['name'] == 'bully-pulpit-production' } &&
+                       requirements.all? { |required| required.is_a?(Array) && required.uniq == required &&
+                         (baseline - required).empty? && (required - baseline - optional).empty? } &&
+                       requirements.first.sort == requirements.last.sort
+
+      primary = runtime_record(File.join(root, 'primary.json'))
+      { primary: deployed['role'] == 'primary' && primary && primary['copy_sha256'] == digest,
+        analytics: deployed['analytics_protocol'].is_a?(Integer) && deployed['analytics_protocol'] == 1 &&
+                   requirements.first.include?('analytics') }
+    end
+
+    def runtime_record(path)
+      raw = safe_read(path, 16_384)
+      return unless raw
+      value = JSON.parse(raw, max_nesting: 8)
+      value if value.is_a?(Hash)
+    rescue JSON::ParserError, JSON::NestingError, SystemCallError, IOError, Unavailable
+      nil
     end
 
     def configured_one_shot_containers
@@ -306,14 +356,14 @@ module Dashboard
       nil
     end
 
-    def inventory
+    def inventory(applications = configured_applications)
       output = command('docker', 'ps', '-a', '--no-trunc', '--format', PS_FORMAT)
       output.lines.first(MAX_CONTAINERS).filter_map do |line|
         row = object(line)
         id, name = row.values_at('id', 'name')
         next unless id.is_a?(String) && id.match?(/\A[0-9a-f]{12,64}\z/) && name.is_a?(String) && name.match?(NAME)
 
-        app = @applications.find { |item| item[:container_name] == name }
+        app = applications.find { |item| item[:container_name] == name }
         one_shot_app = @one_shot_containers[name]
         { id: id, name: name, image: Redactor.line(row['image']), state: safe_state(row['state']),
           status: Redactor.line(row['status']), configured: !app.nil? || !one_shot_app.nil?,
@@ -407,7 +457,7 @@ module Dashboard
     end
 
     def safe_read(path, limit)
-      flags = File::RDONLY
+      flags = File::RDONLY | File::NONBLOCK
       flags |= File::NOFOLLOW if defined?(File::NOFOLLOW)
       File.open(path, flags) do |file|
         raise Unavailable unless file.stat.file? && file.stat.size <= limit
