@@ -65,5 +65,64 @@ class ComposeEnvironmentTest(unittest.TestCase):
                              services['app']['environment']['DATABASE_URL'])
 
 
+    def test_analytics_overlay_is_private_and_does_not_inherit_provider_credentials(self):
+        docker = shutil.which('docker')
+        if not docker:
+            self.skipTest('Docker Compose CLI is unavailable; no daemon is required')
+        version = subprocess.run([docker, 'compose', 'version', '--short'], capture_output=True, text=True, timeout=15)
+        if version.returncode:
+            self.skipTest('Docker Compose CLI is unavailable; no daemon is required')
+        with tempfile.TemporaryDirectory(prefix='bully-analytics-compose-test-') as directory:
+            root = Path(directory)
+            (root / 'secrets').mkdir()
+            (root / 'secrets/app.env').write_text('JWT_SECRET=app-only\nDATABASE_URL=private-db-fixture\nOPENAI_API_KEY=app-only\n')
+            (root / 'secrets/scheduler.env').write_text('CRON_SECRET=scheduler-only\n')
+            (root / 'analytics.env').write_text('ANALYTICS_TOKEN=fixture-only-service-token\n')
+            for name in ['compose.yml', 'analytics.compose.yml', 'nginx.conf', 'scheduler.py']:
+                shutil.copyfile(Path(__file__).with_name(name), root / name)
+            (root / 'release.env').write_text('BULLY_RUNTIME_DIR=' + directory + '\nBULLY_IMAGE=fixture-image:unused\nBULLY_HOST_UID=1000\nBULLY_HOST_GID=1000\n')
+            wrapper = root / 'compose.json'
+            wrapper.write_text(json.dumps({'name': 'bully-pulpit-production',
+                'x-toolbox-required-services': ['app', 'proxy', 'scheduler', 'analytics'],
+                'include': [{'path': [str(root / 'compose.yml'), str(root / 'analytics.compose.yml')],
+                             'project_directory': directory, 'env_file': str(root / 'release.env')}]}))
+            parsed = subprocess.run([docker, 'compose', '-f', str(wrapper), 'config', '--format', 'json'],
+                                    env={'PATH': os.environ['PATH'], 'DOCKER_HOST': 'unix:///nonexistent/bully-compose-test.sock'},
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(0, parsed.returncode, parsed.stderr)
+            config = json.loads(parsed.stdout)
+            app = config['services']['app']; analytics = config['services']['analytics']
+            self.assertEqual('fixture-image:unused', analytics['image'])
+            self.assertEqual(app['image'], analytics['image'])
+            self.assertEqual('1000:1000', analytics['user'])
+            self.assertEqual(['analytics'], list(analytics['networks']))
+            self.assertEqual({'analytics', 'default', 'database'}, set(app['networks']))
+            self.assertTrue(config['networks']['analytics']['internal'])
+            self.assertNotIn('ports', analytics)
+            self.assertTrue(analytics['read_only'])
+            self.assertEqual('app-only', app['environment']['JWT_SECRET'])
+            self.assertEqual('http://analytics:4100', app['environment']['ANALYTICS_URL'])
+            self.assertEqual(app['environment']['ANALYTICS_TOKEN'], analytics['environment']['ANALYTICS_TOKEN'])
+            for key in ['JWT_SECRET', 'DATABASE_URL', 'OPENAI_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'CRON_SECRET']:
+                self.assertNotIn(key, analytics['environment'])
+            self.assertNotIn('ANALYTICS_TOKEN', config['services']['migrate']['environment'])
+            self.assertNotIn('ANALYTICS_TOKEN', config['services']['scheduler']['environment'])
+            self.assertEqual(str(root / 'analytics'), analytics['volumes'][0]['source'])
+            self.assertEqual('2147483648', analytics['environment']['ANALYTICS_MAXIMUM_DATABASE_BYTES'])
+            node = shutil.which('node')
+            if node:
+                health_script = analytics['healthcheck']['test'][-1]
+                for status, expected in [
+                    ({'ready': True, 'degraded': False, 'lastBackupErrorAt': None}, 0),
+                    ({'ready': True, 'degraded': True, 'lastBackupErrorAt': None}, 1),
+                    ({'ready': True, 'degraded': False, 'lastBackupErrorAt': 'fixture-time'}, 1),
+                    ({'ready': False, 'degraded': False, 'lastBackupErrorAt': None}, 1),
+                ]:
+                    # Execute the exact health command against synthetic HTTP data.
+                    fixture = 'globalThis.fetch=async()=>({ok:true,json:async()=>(' + json.dumps(status) + ')});'
+                    checked = subprocess.run([node, '-e', fixture + health_script], capture_output=True, timeout=15)
+                    self.assertEqual(expected, checked.returncode)
+
+
 if __name__ == '__main__':
     unittest.main()

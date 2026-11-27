@@ -147,6 +147,8 @@ module Dashboard
       end
       host << { name: 'cloudflare-tunnel', type: 'host', configured: true } if @config.const_defined?(:TUNNEL_CONFIG) && @config::TUNNEL_CONFIG
       compose = @config.const_defined?(:COMPOSE_APPLICATIONS) ? @config::COMPOSE_APPLICATIONS.flat_map do |item|
+        next [] if item[:enabled_if] && !File.exist?(item[:enabled_if])
+
         item.fetch(:containers).map do |name|
           { name: name, type: 'docker', container_name: name, configured: true }
         end

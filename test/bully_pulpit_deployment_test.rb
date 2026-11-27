@@ -13,11 +13,31 @@ class BullyPulpitDeploymentTest < Minitest::Test
     assert service[:env_file_path].start_with?(Config::DATA_DIR)
     assert service[:enabled_if].end_with?('/enabled.json')
     assert_equal %w[app proxy scheduler], service[:compose_readiness_services]
+    assert_equal %w[analytics], service[:compose_optional_readiness_services]
     Dir.mktmpdir do |directory|
       service = service.merge(enabled_if: File.join(directory, 'missing'))
       Core::GitService.stub(:prepare_release, ->(*) { flunk 'disabled deployment fetched code' }) do
         assert Core::GitService.update_git_service(service)
       end
+    end
+  end
+
+  def test_frozen_readiness_manifest_adds_analytics_only_for_capable_releases
+    Dir.mktmpdir do |directory|
+      file = File.join(directory, 'compose.json')
+      service = { compose_file: file, compose_readiness_services: %w[app proxy scheduler],
+                  compose_optional_readiness_services: %w[analytics] }
+      assert_equal %w[app proxy scheduler], Core::GitService.required_compose_services(service)
+      File.write(file, '{}')
+      assert_equal %w[app proxy scheduler], Core::GitService.required_compose_services(service)
+      File.write(file, JSON.generate('x-toolbox-required-services' => %w[app proxy scheduler analytics]))
+      assert_equal %w[app proxy scheduler analytics], Core::GitService.required_compose_services(service)
+      [%w[app analytics], %w[app proxy scheduler other], %w[app proxy scheduler analytics analytics], 'analytics'].each do |invalid|
+        File.write(file, JSON.generate('x-toolbox-required-services' => invalid))
+        assert_raises(RuntimeError) { Core::GitService.required_compose_services(service) }
+      end
+      File.write(file, 'invalid')
+      assert_raises(RuntimeError) { Core::GitService.required_compose_services(service) }
     end
   end
 
@@ -149,6 +169,42 @@ class BullyPulpitDeploymentTest < Minitest::Test
           assert_equal 'previous healthy release', File.read(marker)
         end
       end
+    end
+  end
+
+  def test_preparing_a_capable_release_reloads_its_readiness_requirements_before_recording
+    Dir.mktmpdir do |directory|
+      file = File.join(directory, 'compose.json'); File.write(file, '{}')
+      service = { name: 'fixture', local_path: directory, use_compose: true, compose_file: file,
+                  compose_readiness_services: %w[app proxy scheduler], compose_optional_readiness_services: %w[analytics],
+                  build_cmd: 'prepare', release_environment: true, after_deploy_command: 'record',
+                  deployment_marker_path: File.join(directory, 'deployment.head') }
+      commands = []
+      build = lambda do |_location, command, **_options|
+        commands << command
+        File.write(file, JSON.generate('x-toolbox-required-services' => %w[app proxy scheduler analytics])) if command == 'prepare'
+      end
+      check = lambda do |_location, _file, services|
+        assert_equal %w[app proxy scheduler analytics], services
+        false
+      end
+      Core::GitService.stub(:prepare_release, { head: 'a' * 40, cloned: false }) do
+        Core::GitService.stub(:deployment_required?, true) do
+          Core::GitService.stub(:with_release_snapshot, ->(_path, _sha, &block) { block.call('/verified-archive') }) do
+            Core::GitService.stub(:run_build_command, build) do
+              Core::GitService.stub(:run_command, ->(*_args, **_options) { ["running\n", '', FakeStatus.new(true)] }) do
+                Core::GitService.stub(:docker_compose_up, ->(*_args, **_options) {}) do
+                  Core::GitService.stub(:compose_services_ready?, check) do
+                    assert_raises(RuntimeError) { Core::GitService.update_git_service(service) }
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+      assert_equal ['prepare'], commands
+      refute File.exist?(service[:deployment_marker_path])
     end
   end
 

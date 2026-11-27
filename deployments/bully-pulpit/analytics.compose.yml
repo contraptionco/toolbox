@@ -1,0 +1,57 @@
+# Merged only for a verified app release advertising analytics protocol 1.
+services:
+  app:
+    env_file:
+      - path: ./analytics.env
+        format: raw
+    environment:
+      ANALYTICS_URL: http://analytics:4100
+    networks: [analytics]
+
+  analytics:
+    image: ${BULLY_IMAGE:?immutable image required}
+    pull_policy: never
+    container_name: bully-pulpit-production-analytics
+    restart: unless-stopped
+    init: true
+    user: ${BULLY_HOST_UID:?host uid required}:${BULLY_HOST_GID:?host gid required}
+    command: [node, --import, tsx, services/analytics/server.ts]
+    env_file:
+      - path: ./analytics.env
+        format: raw
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=384
+      ANALYTICS_HOST: 0.0.0.0
+      ANALYTICS_PORT: '4100'
+      ANALYTICS_DB_PATH: /data/analytics.duckdb
+      ANALYTICS_BACKUP_DIR: /data/backups
+      ANALYTICS_RETENTION_DAYS: '730'
+      ANALYTICS_MINIMUM_FREE_BYTES: '2147483648'
+      ANALYTICS_MAXIMUM_DATABASE_BYTES: '2147483648'
+    volumes:
+      - ${BULLY_RUNTIME_DIR:?private runtime required}/analytics:/data
+    networks: [analytics]
+    read_only: true
+    tmpfs: ['/tmp:size=64m,mode=1777']
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 64
+    mem_limit: 1g
+    cpus: 1
+    stop_grace_period: 45s
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:4100/health").then(async r=>{const h=await r.json();process.exit(r.ok&&h.ready===true&&h.degraded===false&&!h.lastBackupErrorAt?0:1)}).catch(()=>process.exit(1))']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+
+networks:
+  analytics:
+    internal: true
