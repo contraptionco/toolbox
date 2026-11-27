@@ -222,7 +222,10 @@ module Dashboard
     def snapshot
       @snapshot_mutex.synchronize do
         if @snapshot_at.nil? || @clock.call - @snapshot_at >= @cache_seconds
-          @snapshot = @collector.snapshot
+          value = @collector.snapshot
+          # The checkout can advance while this process is still serving its
+          # earlier code. Report the loaded revision independently of disk state.
+          @snapshot = value.merge(deployment: (value[:deployment] || {}).merge(dashboard_commit: @revision))
           @snapshot_at = @clock.call
         end
         @snapshot

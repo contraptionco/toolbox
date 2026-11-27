@@ -26,7 +26,13 @@ class DashboardMCPTest < Minitest::Test
     def initialize = @calls = []
     def snapshot
       @calls << :snapshot
-      { generated_at: 'fixture', host: { name: 'fixture-host' }, containers: [{ name: 'postcard' }], log_sources: [{ id: 'container:postcard' }], errors: [], warnings: [] }
+      { generated_at: 'fixture', host: { name: 'fixture-host' }, containers: [{ name: 'postcard' }],
+        deployment: { dashboard_commit: 'a' * 40, checkout_commit: 'b' * 40, status: 'stale' },
+        applications: [{ name: 'postcard', running_commit: nil, last_successful_commit: 'c' * 40,
+                         running_image_id: 'sha256:' + 'd' * 64, revision_evidence: 'last_successful_only' },
+                       { name: 'bully-pulpit', running_commit: 'e' * 40, revision_evidence: 'image_match' },
+                       { name: 'external', running_commit: nil, last_successful_commit: nil, revision_evidence: 'unknown' }],
+        log_sources: [{ id: 'container:postcard' }], errors: [], warnings: ['Fixture stale evidence warning'] }
     end
     def logs(source, lines:)
       @calls << [source, lines]
@@ -85,7 +91,7 @@ class DashboardMCPTest < Minitest::Test
     response = call('initialize', { protocolVersion: 'future', capabilities: {}, clientInfo: { name: 'fixture', version: '1' } })
     assert_equal '2025-11-25', parsed(response).dig('result', 'protocolVersion')
     tools = parsed(call).dig('result', 'tools')
-    assert_equal %w[toolbox_status toolbox_containers toolbox_logs], tools.map { |tool| tool['name'] }
+    assert_equal %w[toolbox_status toolbox_deployments toolbox_containers toolbox_logs], tools.map { |tool| tool['name'] }
     assert tools.all? { |tool| tool.dig('annotations', 'readOnlyHint') && !tool.dig('annotations', 'destructiveHint') }
     assert_empty @collector.calls
   end
@@ -124,6 +130,37 @@ class DashboardMCPTest < Minitest::Test
     containers = parsed(call('tools/call', { name: 'toolbox_containers' })).dig('result', 'structuredContent')
     assert_equal ['postcard'], containers.fetch('containers').map { |row| row['name'] }
     refute containers.key?('host')
+  end
+
+  def test_deployments_tool_keeps_runtime_checkout_and_historical_evidence_distinct
+    @oauth.scopes = ['toolbox:read']
+    tools = parsed(call).dig('result', 'tools')
+    assert_includes tools.map { |tool| tool['name'] }, 'toolbox_deployments'
+    response = call('tools/call', { name: 'toolbox_deployments' })
+    assert_equal 200, response.status
+    value = parsed(response).dig('result', 'structuredContent')
+    assert_equal %w[applications deployment errors generated_at warnings], value.keys.sort
+    assert_equal 'a' * 40, value.dig('deployment', 'dashboard_commit')
+    assert_equal 'b' * 40, value.dig('deployment', 'checkout_commit')
+    assert_equal 'stale', value.dig('deployment', 'status')
+    assert_nil value.dig('applications', 0, 'running_commit')
+    assert_equal 'c' * 40, value.dig('applications', 0, 'last_successful_commit')
+    assert_equal 'last_successful_only', value.dig('applications', 0, 'revision_evidence')
+    assert_equal 'e' * 40, value.dig('applications', 1, 'running_commit')
+    assert_equal 'image_match', value.dig('applications', 1, 'revision_evidence')
+    assert_equal 'unknown', value.dig('applications', 2, 'revision_evidence')
+    assert_equal ['Fixture stale evidence warning'], value['warnings']
+    refute value.key?('host')
+    refute value.key?('containers')
+    refute value.key?('log_sources')
+    assert_equal [:snapshot], @collector.calls
+  end
+
+  def test_deployments_tool_rejects_arguments_and_missing_read_scope_before_collection
+    assert_equal(-32602, parsed(call('tools/call', { name: 'toolbox_deployments', arguments: { path: '/private/other-repo' } })).dig('error', 'code'))
+    @oauth.scopes = ['toolbox:logs']
+    assert_equal 403, call('tools/call', { name: 'toolbox_deployments' }).status
+    assert_empty @collector.calls
   end
 
   def test_log_calls_are_allowlisted_and_bounded

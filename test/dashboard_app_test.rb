@@ -148,6 +148,32 @@ class DashboardAppTest < Minitest::Test
     assert_equal 2, @collector.snapshot_calls
   end
 
+  def test_running_dashboard_revision_does_not_follow_checkout_or_mutate_collector_evidence
+    checkout = 'b' * 40
+    running = 'a' * 40
+    evidence = { status: 'stale', commit: checkout, checkout_commit: checkout, dashboard_commit: 'untrusted-collector-value' }.freeze
+    sample = { deployment: evidence, log_sources: [] }.freeze
+    @collector.define_singleton_method(:snapshot) { sample }
+    @app = Dashboard::App.new(collector: @collector, auth_http: @auth_http, oauth: @oauth,
+      origin: 'https://toolbox.example', public_dir: @public, revision: running, clock: -> { @now })
+    [0, 11].each do |at|
+      @now = at
+      deployment = JSON.parse(request('/api/status').body).fetch('deployment')
+      assert_equal running, deployment['dashboard_commit']
+      assert_equal checkout, deployment['checkout_commit']
+      assert_equal checkout, deployment['commit']
+      assert_equal 'stale', deployment['status']
+    end
+    assert_equal 'untrusted-collector-value', evidence[:dashboard_commit]
+  end
+
+  def test_runtime_revision_does_not_make_missing_heartbeat_evidence_healthy
+    deployment = JSON.parse(request('/api/status').body).fetch('deployment')
+    assert_equal 'fixture-sha', deployment['dashboard_commit']
+    refute deployment.key?('status')
+    refute deployment.key?('commit')
+  end
+
   def test_log_sources_are_allowlisted_before_the_collector_receives_them
     ['../../secret', 'toolbox; touch /tmp/owned', 'docker:unlisted', ''].each do |source|
       assert_equal 400, request('/api/logs', query: { 'source' => source }).status

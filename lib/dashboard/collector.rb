@@ -14,10 +14,11 @@ module Dashboard
     MAX_LOG_LINES = 200
     MAX_CONTAINERS = 128
     NAME = /\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\z/
-    SHA = /\A[0-9a-f]{40,64}\z/
+    SHA = /\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/
+    IMAGE_ID = /\Asha256:[0-9a-f]{64}\z/
     PS_FORMAT = '{"id":{{json .ID}},"name":{{json .Names}},"image":{{json .Image}},"state":{{json .State}},"status":{{json .Status}}}'.freeze
     STATS_FORMAT = '{"id":{{json .ID}},"name":{{json .Name}},"cpu":{{json .CPUPerc}},"memory":{{json .MemUsage}},"memory_percent":{{json .MemPerc}},"network":{{json .NetIO}},"block":{{json .BlockIO}},"pids":{{json .PIDs}}}'.freeze
-    INSPECT_FORMAT = '{"id":{{json .Id}},"started_at":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"health":{{with index .State "Health"}}{{json .Status}}{{else}}"none"{{end}}}'.freeze
+    INSPECT_FORMAT = '{"id":{{json .Id}},"image_id":{{json .Image}},"started_at":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"health":{{with index .State "Health"}}{{json .Status}}{{else}}"none"{{end}}}'.freeze
     HOST_PROCESSES = { 'netdata' => 'netdata', 'cloudflare-tunnel' => 'cloudflared' }.freeze
 
     class Unavailable < StandardError; end
@@ -48,7 +49,8 @@ module Dashboard
       collect(errors, 'host memory') { host[:memory] = memory_usage }
       collect(errors, 'host load') { host.merge!(system_usage) }
       collect(errors, 'Docker disk') { host[:docker_disk] = docker_disk }
-      configured = configured_applications
+      bully_runtime = bully_pulpit_runtime
+      configured = configured_applications(bully_runtime)
       inventory_result = collect(errors, 'Docker inventory') { inventory(configured) }
       containers = inventory_result || []
       if !containers.empty?
@@ -70,7 +72,8 @@ module Dashboard
                        app[:standby] ? 'standby' : 'stopped'
                      end
         app.merge(status: app_status, image: container&.dig(:image),
-                  started_at: container&.dig(:started_at), commit: deployed).compact
+                  started_at: container&.dig(:started_at), commit: deployed)
+           .merge(application_revision(app, container, deployed, app_status, bully_runtime)).compact
       end
       containers.each do |container|
         if container[:state] == 'running' && !container[:configured] && !container[:transient]
@@ -124,8 +127,7 @@ module Dashboard
 
     private
 
-    def configured_applications
-      bully_runtime = bully_pulpit_runtime
+    def configured_applications(bully_runtime = bully_pulpit_runtime)
       direct = @config::DOCKER_SERVICES.map { |item| { name: item.fetch(:name), type: 'docker', container_name: item.fetch(:name), configured: true } }
       git = @config::GIT_SERVICES.filter_map do |item|
         container_name = if item[:container_config]
@@ -192,9 +194,46 @@ module Dashboard
                        requirements.first.sort == requirements.last.sort
 
       primary = runtime_record(File.join(root, 'primary.json'))
-      { primary: deployed['role'] == 'primary' && primary && primary['copy_sha256'] == digest,
+      result = { primary: deployed['role'] == 'primary' && primary && primary['copy_sha256'] == digest,
         analytics: deployed['analytics_protocol'].is_a?(Integer) && deployed['analytics_protocol'] == 1 &&
                    requirements.first.include?('analytics') }
+      sha, image = deployed.values_at('application_sha', 'image')
+      if sha.is_a?(String) && sha.match?(SHA) && image.is_a?(String) && image.match?(IMAGE_ID)
+        result[:release] = { recorded_commit: sha, recorded_image_id: image, deployed_at: safe_time(deployed['ready_at']) }
+      end
+      result
+    end
+
+    def application_revision(app, container, last_successful, status, bully_runtime)
+      running = container && container[:state] == 'running'
+      evidence = if status == 'unknown' || app[:type] != 'docker'
+                   'unknown'
+                 elsif !running
+                   'not_running'
+                 elsif last_successful
+                   'last_successful_only'
+                 else
+                   'unknown'
+                 end
+      revision = { last_successful_commit: last_successful, running_image_id: running ? container[:image_id] : nil,
+                   revision_evidence: evidence }
+      same_release = app[:container_name] == 'bully-pulpit-production' ||
+                     (app[:container_name] == 'bully-pulpit-production-analytics' && bully_runtime[:analytics])
+      release = bully_runtime[:release] if same_release
+      return revision unless release
+
+      revision.merge!(release)
+      if running && container[:image_id]
+        if container[:image_id] == release[:recorded_image_id]
+          revision[:running_commit] = release[:recorded_commit]
+          revision[:revision_evidence] = 'image_match'
+        else
+          revision[:revision_evidence] = 'image_mismatch'
+        end
+      elsif running
+        revision[:revision_evidence] = 'unknown'
+      end
+      revision
     end
 
     def runtime_record(path)
@@ -404,7 +443,9 @@ module Dashboard
         container = containers.find { |item| item[:id] == row['id'] }
         next unless container
 
-        container.merge!(started_at: safe_time(row['started_at']),
+        image_id = row['image_id']
+        container.merge!(image_id: image_id.is_a?(String) && image_id.match?(IMAGE_ID) ? image_id : nil,
+                         started_at: safe_time(row['started_at']),
                          restarts: row['restarts'].is_a?(Integer) && row['restarts'] >= 0 ? row['restarts'] : nil,
                          health: %w[healthy unhealthy starting none].include?(row['health']) ? row['health'] : 'unknown')
       end
@@ -416,8 +457,8 @@ module Dashboard
       collect(errors, 'Toolbox revision') do
         sha = command('git', '-C', @repo_dir, 'rev-parse', 'HEAD').strip
         branch = command('git', '-C', @repo_dir, 'symbolic-ref', '--quiet', '--short', 'HEAD').strip
-        deployment[:commit] = sha if sha.match?(SHA)
-        deployment[:branch] = branch if branch.match?(NAME)
+        deployment[:commit] = deployment[:checkout_commit] = sha if sha.match?(SHA)
+        deployment[:branch] = deployment[:checkout_branch] = branch if branch.match?(NAME)
       end
       marker = safe_read(File.join(@repo_dir, '.runtime/heartbeat-status.json'), 8192)
       return deployment unless marker
@@ -425,6 +466,8 @@ module Dashboard
       data = JSON.parse(marker)
       raise Unavailable unless data.is_a?(Hash)
 
+      heartbeat_commit = data['commit']
+      deployment[:heartbeat_commit] = heartbeat_commit if heartbeat_commit.is_a?(String) && heartbeat_commit.match?(SHA)
       status = data['status']
       status = 'unknown' unless %w[running healthy failed].include?(status)
       started = safe_time(data['started_at'])

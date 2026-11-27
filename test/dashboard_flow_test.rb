@@ -16,6 +16,8 @@ require_relative '../lib/dashboard/http_handler'
 # No host collectors, production files, SMTP, Docker, or external OAuth requests.
 class DashboardFlowTest < Minitest::Test
   ORIGIN = 'https://toolbox.example'.freeze
+  DASHBOARD_COMMIT = ('a' * 40).freeze
+  CHECKOUT_COMMIT = ('b' * 40).freeze
 
   class Mailer
     attr_reader :deliveries
@@ -29,6 +31,9 @@ class DashboardFlowTest < Minitest::Test
   class Collector
     def snapshot
       { generated_at: '2026-11-27T12:00:00Z', host: { name: 'synthetic-host' },
+        deployment: { commit: CHECKOUT_COMMIT, checkout_commit: CHECKOUT_COMMIT, status: 'healthy' },
+        applications: [{ name: 'fixture-container', running_commit: nil, last_successful_commit: 'c' * 40,
+                         revision_evidence: 'last_successful_only' }],
         containers: [{ name: 'fixture-container', state: 'running' }],
         log_sources: [{ id: 'container:fixture-container', label: 'Fixture' }], errors: [], warnings: [] }
     end
@@ -49,7 +54,7 @@ class DashboardFlowTest < Minitest::Test
     auth = Dashboard::Auth.new(store: @store, origin: ORIGIN, secret: 'fixture-only-secret-' * 3, mailer: @mailer)
     oauth = Dashboard::OAuth.new(store: @store, origin: ORIGIN)
     app = Dashboard::App.new(collector: Collector.new, auth_http: Dashboard::AuthHTTP.new(auth: auth),
-      oauth: oauth, origin: ORIGIN, public_dir: public_dir, revision: 'fixture-only')
+      oauth: oauth, origin: ORIGIN, public_dir: public_dir, revision: DASHBOARD_COMMIT)
     @server = WEBrick::HTTPServer.new(BindAddress: '127.0.0.1', Port: 0, MaxClients: 4,
       RequestTimeout: 5, AccessLog: [], Logger: WEBrick::Log.new(File::NULL))
     @server.mount('/', Dashboard::HTTPHandler, app)
@@ -155,9 +160,15 @@ class DashboardFlowTest < Minitest::Test
     assert_status 200, initialized
     assert_equal 'Toolbox', json(initialized).dig('result', 'serverInfo', 'name')
     listed = mcp(token, 'tools/list')
-    assert_equal %w[toolbox_status toolbox_containers toolbox_logs], json(listed).dig('result', 'tools').map { |tool| tool.fetch('name') }
+    assert_equal %w[toolbox_status toolbox_deployments toolbox_containers toolbox_logs], json(listed).dig('result', 'tools').map { |tool| tool.fetch('name') }
     status = mcp(token, 'tools/call', { name: 'toolbox_status' })
     assert_equal 'synthetic-host', json(status).dig('result', 'structuredContent', 'host', 'name')
+    deployments = mcp(token, 'tools/call', { name: 'toolbox_deployments' })
+    assert_status 200, deployments
+    assert_equal DASHBOARD_COMMIT, json(deployments).dig('result', 'structuredContent', 'deployment', 'dashboard_commit')
+    assert_equal CHECKOUT_COMMIT, json(deployments).dig('result', 'structuredContent', 'deployment', 'checkout_commit')
+    assert_nil json(deployments).dig('result', 'structuredContent', 'applications', 0, 'running_commit')
+    assert_equal 'c' * 40, json(deployments).dig('result', 'structuredContent', 'applications', 0, 'last_successful_commit')
     containers = mcp(token, 'tools/call', { name: 'toolbox_containers' })
     assert_equal 'fixture-container', json(containers).dig('result', 'structuredContent', 'containers', 0, 'name')
     logs = mcp(token, 'tools/call', { name: 'toolbox_logs', arguments: { source: 'container:fixture-container', lines: 10 } })
@@ -166,11 +177,14 @@ class DashboardFlowTest < Minitest::Test
     assert_equal(-32602, json(denied_logs).dig('error', 'code'))
 
     refreshed = request(:post, '/oauth/token', browser: false, form: {
-      grant_type: 'refresh_token', client_id: client_id, refresh_token: tokens.fetch('refresh_token'), resource: resource })
+      grant_type: 'refresh_token', client_id: client_id, refresh_token: tokens.fetch('refresh_token'), resource: resource, scope: 'toolbox:read' })
     assert_status 200, refreshed
     rotated = json(refreshed)
     assert rotated.fetch('refresh_token') != tokens.fetch('refresh_token'), 'Refresh tokens rotate.'
     assert_status 200, mcp(rotated.fetch('access_token'), 'ping')
+    assert_equal 'toolbox:read', rotated.fetch('scope')
+    assert_status 200, mcp(rotated.fetch('access_token'), 'tools/call', { name: 'toolbox_deployments' })
+    assert_status 403, mcp(rotated.fetch('access_token'), 'tools/call', { name: 'toolbox_logs', arguments: { source: 'container:fixture-container' } })
     connections = json(request(:get, '/oauth/connections')).fetch('connections')
     assert_equal 1, connections.length
     assert_status 200, auth_post('/oauth/connections/revoke', { id: connections.first.fetch('id') })

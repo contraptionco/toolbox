@@ -141,8 +141,16 @@ do not authorize MCP. These discovery, PKCE and resource checks follow the
 
 | Permission | Tools and data |
 | --- | --- |
-| `toolbox:read` | `toolbox_status` and `toolbox_containers`: bounded host, deployment and container inventory/metrics |
+| `toolbox:read` | `toolbox_status`, `toolbox_deployments` and `toolbox_containers`: bounded host, deployment and container inventory/metrics |
 | `toolbox:logs` | `toolbox_logs`: up to 200 recent, redacted lines from a currently allowed source; also requires `toolbox:read` |
+
+`toolbox_deployments` reports the loaded dashboard Git revision separately from
+Toolbox's checkout revision. Per-application results distinguish a verified
+`running_commit` from a `last_successful_commit` deployment record. A historical
+record alone does not prove what is currently running: inspect `revision_evidence`
+and `running_image_id`, and treat missing or mismatched evidence as unknown. The
+web interface labels the dashboard and checkout separately and only displays a
+running application SHA when the image evidence matches.
 
 There are no shell, deployment, restart, container mutation, arbitrary-file or
 credential tools. Logs can contain sensitive application text despite redaction;
