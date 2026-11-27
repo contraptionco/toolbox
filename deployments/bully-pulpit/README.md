@@ -154,7 +154,7 @@ operation. Never use `down -v` or delete the old pilot while validating this mov
 
 ## Scheduled work
 
-`scheduler.py` preserves four UTC schedules:
+`scheduler.py` dispatches five UTC schedules:
 
 | Route | Schedule |
 | --- | --- |
@@ -162,18 +162,30 @@ operation. Never use `down -v` or delete the old pilot while validating this mov
 | bell-retention | `17 10 * * *` |
 | subscriber-backup | `0 11 1 * *` |
 | morning-report | `*/15 11,12 * * *` |
+| analytics-report | `*/15 11,12 * * *` |
 
 The scheduler does nothing unless its role is primary. A persistent SQLite ledger
 under `scheduler/` transactionally claims each route and UTC minute before its
 HTTP request. Multiple tickers and restarts cannot repeat that interval. Failed,
 interrupted or uncertain requests are not automatically retried in the same
 interval, particularly the monthly subscriber email. This provides at-most-once
-attempts, not exactly-once external delivery. Morning report keeps its existing
-application deduplication and same-morning catch-up. Missed intervals after a
-restart are recorded rather than replayed. Failed/missed attempts and stale
+attempts, not exactly-once external delivery. Both daily reports keep their own
+application deduplication and same-morning catch-up. Their routes accept work only
+during 7am `America/New_York`; polling both 11:00 and 12:00 UTC handles daylight
+saving time. The analytics report summarizes the previous New York calendar day.
+Missed intervals after a restart are recorded rather than replayed. Failed/missed attempts and stale
 heartbeats make the scheduler container unhealthy until a later successful
 interval or a reviewed repair. Logs include only route, minute, outcome and HTTP
 status; no response bodies or credentials.
+
+The analytics schedule requires an application release with
+`/api/cron/analytics-report`. Deploy that app release before enabling this schedule,
+or coordinate both reviewed main merges under the existing heartbeat maintenance
+lock so the next normal heartbeat freezes the matching app and scheduler together.
+Do not deploy the scheduler first: an old app returns 404 and the attempt becomes
+unhealthy. Preserve the SQLite ledger and let normal heartbeat readiness select
+the release; do not run development orchestration against production. A rollback
+that removes the route must restore its matching frozen scheduler configuration.
 
 ## Development checks
 
@@ -193,9 +205,9 @@ Do not run deployment scripts against real services to test code changes.
 Application releases containing the exact `services/analytics/capabilities.json`
 manifest `{"protocol":1}`, the service entrypoint, and the locked DuckDB dependency
 include `analytics.compose.yml` in the frozen release. Older application commits
-retain their existing app/proxy/scheduler deployment. Either repository's PR can
-land first without trying to run an executable absent from the image. The frozen
-Compose wrapper records its required services; readiness is re-read after prepare
+retain their existing app/proxy/scheduler deployment. For this companion
+capability, either repository's PR can land first without trying to run an
+executable absent from the image. The frozen Compose wrapper records its required services; readiness is re-read after prepare
 and restored together with that wrapper on rollback.
 
 The `bully-pulpit-production-analytics` companion is the sole DuckDB writer. It
