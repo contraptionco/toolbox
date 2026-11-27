@@ -119,10 +119,11 @@
     overall('Waiting for a live connection', 'neutral');
     lastLogText = '';
     lastLogSource = '';
-    ['disk-used','disk-free','disk-available','memory-used','memory-total','load-current','load-five','load-fifteen','cpu-count','running-count','configured-running','deploy-checked','deploy-success','deploy-branch','deploy-commit','host-uptime','inventory-count'].forEach((id) => set(id, '—'));
+    ['disk-used','disk-free','disk-available','memory-used','memory-total','load-current','load-five','load-fifteen','cpu-count','running-count','configured-running','deploy-checked','deploy-success','deploy-branch','deploy-commit','dashboard-commit','host-uptime','inventory-count'].forEach((id) => set(id, '—'));
     ['disk-occupied','disk-reclaimable','memory-meter'].forEach((id) => { $(id).style.width = '0%'; });
     $('disk-meter').setAttribute('aria-label', 'Disk utilization unavailable');
     $('deploy-checked').removeAttribute('title'); $('deploy-success').removeAttribute('title');
+    $('deploy-commit').removeAttribute('title'); $('dashboard-commit').removeAttribute('title');
     set('host-name', 'Mac mini'); set('host-os', 'Production host'); set('docker-storage', 'Docker storage is measured by allocated disk space.');
     set('disk-state', 'Macintosh HD'); $('disk-state').className = 'small-tag'; set('memory-state', 'Host');
     set('memory-note', 'Current host memory usage');
@@ -149,7 +150,7 @@
     clearTimeout(statusTimer); clearTimeout(logTimer);
     clearSensitive();
     overall('Sign in to reconnect', 'warning');
-    notice('Your Cloudflare session has ended. Sign in again to see live readings.', true);
+    notice('Your Toolbox session has ended. Sign in again to see live readings.', true);
   }
   function renderStatus(data) {
     snapshot = data;
@@ -204,7 +205,12 @@
     set('deploy-message', deploy.message || 'The host checks for deployment updates every minute.');
     set('deploy-checked', relative(deploy.last_run_at)); $('deploy-checked').title = time(deploy.last_run_at);
     set('deploy-success', relative(deploy.last_success_at)); $('deploy-success').title = time(deploy.last_success_at);
-    set('deploy-branch', deploy.branch || '—'); set('deploy-commit', deploy.commit ? String(deploy.commit).slice(0, 8) : '—');
+    const checkoutCommit = deploy.checkout_commit || deploy.commit;
+    set('deploy-branch', deploy.checkout_branch || deploy.branch || '—');
+    set('deploy-commit', checkoutCommit ? String(checkoutCommit).slice(0, 8) : '—');
+    $('deploy-commit').title = checkoutCommit || 'Checkout revision unavailable';
+    set('dashboard-commit', deploy.dashboard_commit ? String(deploy.dashboard_commit).slice(0, 8) : '—');
+    $('dashboard-commit').title = deploy.dashboard_commit || 'Running dashboard revision unavailable';
     set('application-count', `${applications.length} configured services`);
     renderWarnings(unmanaged, warnings, errors, disk);
     renderApplications(applications);
@@ -239,6 +245,16 @@
       const type = external ? 'External host' : app.type === 'host' ? 'Host service' : 'Docker';
       const subtitle = external ? (app.description || 'Hosted elsewhere · not checked') : `${type} · ${app.status || 'unknown'}`;
       info.append(element('p', 'app-subtitle', subtitle));
+      const validCommit = (value) => typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
+      if (app.revision_evidence === 'image_match' && validCommit(app.running_commit)) {
+        const revision = element('p', 'app-subtitle', `Running ${app.running_commit.slice(0, 8)}`);
+        revision.title = `Running image matches deployment record: ${app.running_commit}`;
+        info.append(revision);
+      } else if (validCommit(app.last_successful_commit)) {
+        const revision = element('p', 'app-subtitle', `Last successful ${app.last_successful_commit.slice(0, 8)}${app.status === 'running' ? ' · current revision unknown' : ''}`);
+        revision.title = `Last successful deployment record: ${app.last_successful_commit}. This does not verify the running image.`;
+        info.append(revision);
+      }
       card.append(icon, info);
       const stateDot = dot(external ? 'unknown' : app.status); stateDot.title = external ? 'Hosted elsewhere' : app.status || 'Unknown'; card.append(stateDot);
       const url = safeUrl(app.url);
@@ -323,7 +339,6 @@
       if (requestEpoch !== epoch) return;
       if (error instanceof SessionError) sessionExpired();
       else {
-        // Access redirects can become a network error before we receive a 401.
         // Clear the previous session's readings even when the cause is unknown.
         clearSensitive();
         overall('Live readings interrupted', 'warning');
@@ -385,7 +400,7 @@
   $('filter-all').addEventListener('click', () => setFilter('all'));
   $('filter-unconfigured').addEventListener('click', () => setFilter('unconfigured'));
   $('refresh').addEventListener('click', () => { refreshStatus(); refreshLogs(); });
-  $('reconnect').addEventListener('click', () => window.location.reload());
+  $('reconnect').addEventListener('click', () => window.location.assign('/login?next=%2F'));
   $('log-source').addEventListener('change', changeLogSource);
   $('pause-logs').addEventListener('click', () => {
     if ($('log-source').disabled) return;
@@ -401,9 +416,24 @@
     setTimeout(() => set('copy-logs', 'Copy'), 2000);
   });
   $('follow-logs').addEventListener('change', () => { if ($('follow-logs').checked) $('log-output').scrollTop = $('log-output').scrollHeight; });
-  $('sign-out').addEventListener('click', () => {
+  $('sign-out').addEventListener('click', async (event) => {
+    event.preventDefault();
     active = false; clearSensitive();
     navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_TOOLBOX_CACHE' });
+    try {
+      const controller = new AbortController();
+      const session = await request('/auth/session', controller);
+      const response = await fetch('/auth/logout', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrf_token }, body: '{}',
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error('Sign out failed');
+      window.location.assign('/login');
+    } catch {
+      overall('Unable to sign out', 'warning');
+      notice('Unable to sign out. Your readings have been cleared. Reconnect and try signing out again.', true);
+    }
   });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { refreshStatus(); refreshLogs(); }

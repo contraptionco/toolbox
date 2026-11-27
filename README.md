@@ -39,7 +39,9 @@ This toolbox is built with the following principles in mind:
 - **Lock screen on boot**: Secure your server with automatic screen locking after reboot
 - **Complex Git Service Management**: Supports services requiring initial setup scripts and managed via their own Docker Compose.
 - **Private dashboard**: Native host metrics, deployment status, Docker inventory,
-  container metrics and redacted live logs behind Cloudflare Access.
+  container metrics and redacted live logs with owner-only email/passkey sign-in.
+- **Private MCP connector**: Read host status, containers and bounded logs from Claude
+  with scoped, revocable OAuth access.
 
 ## Dashboard
 
@@ -58,18 +60,34 @@ PostgreSQL database are not dependencies of the UI. Netdata and its scheduled
 log rotation are retired; the dashboard reads host metrics directly. Existing
 Netdata files and metric history are preserved.
 
-Cloudflare Access is the only login. The existing Toolbox UI application uses the
-same private allow policy as Junk Drawer. The tunnel connector and Ruby origin
-both verify the Access application token. There are no mutation or command
-endpoints. `/healthz` contains only readiness and the loaded revision; other
-routes require a valid token. Host logs are bounded and conservatively redacted,
-but may still contain sensitive application output and remain private.
+Toolbox owns its sign-in. Only `philip@ilic.nyc` can receive a one-time email
+code; no other accounts can register. After signing in, open **Sign-in &
+connections** to add a passkey. Email remains available for recovery. Sessions,
+passkeys and OAuth grants live in a private SQLite database outside the checkout.
+The dashboard still uses Cloudflare Tunnel for HTTPS routing. Removing the
+previous Cloudflare Access gate is a separate production cutover, described in
+[Dashboard authentication and MCP](docs/dashboard-auth.md).
 
-On an iPhone, open the dashboard in Safari, sign in through Cloudflare, then use
-**Share → Add to Home Screen**. The web app has its own icons and standalone
-display. Offline mode shows a reconnect message; metrics, logs and authentication
-responses are never saved for offline use. Current metrics refresh every ten
-seconds and logs every five seconds while visible. History is not retained.
+Host data endpoints remain read-only. Authentication and OAuth have narrowly
+scoped POST endpoints, but neither the website nor MCP can execute shell commands,
+change containers or read arbitrary files. `/healthz` exposes readiness and the
+loaded revision; login assets and OAuth discovery are public. Host metrics and
+logs require a browser session or the relevant MCP bearer-token scope. Log
+redaction is best effort, so logs remain private.
+
+To connect Claude, use `https://toolbox.contraption.co/mcp` as a custom connector,
+use Claude's published OAuth identity, then sign in and approve its access.
+There is no client secret to paste into Claude. **Sign-in & connections** lists
+and revokes approved connections. See the [setup guide](docs/dashboard-auth.md#connect-claude)
+for the supported client settings and scopes.
+
+On an iPhone, open the dashboard in Safari, sign in, then use **Share → Add to
+Home Screen**. The web app has its own icons and standalone display. Offline mode
+shows a reconnect message; metrics, logs and authentication responses are never
+saved for offline use. Current metrics refresh every ten seconds and logs every
+five seconds while visible. The dashboard does not retain metric or log history.
+A [logging recommendation](docs/dashboard-auth.md#logging-and-retention) covers
+future cross-container search and the limits of a nominal 24-hour retention period.
 
 ### Develop and verify the dashboard
 
@@ -82,22 +100,31 @@ ruby web/server.rb --demo
 ```
 
 Open `http://127.0.0.1:4179` for synthetic host/container/log fixtures. Demo mode
-cannot read production metrics. Unit tests use fake command runners, temporary
-files and generated signing keys, so they do not need Docker or Cloudflare:
+exercises the real sign-in and passkey UI against a temporary database. It writes
+test email codes to the private file named at startup and sends no email. It
+cannot read production metrics. Stop the demo when finished; its temporary auth
+data is removed on exit. `TOOLBOX_DEMO_PORT` can select another local port.
+
+Unit tests use temporary databases, fake command runners, generated credentials
+and a virtual WebAuthn authenticator. They need no production Docker, Cloudflare,
+1Password or email credentials:
 
 ```sh
 ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
 zsh -n heartbeat.sh
 node --check web/public/app.js
+node --check web/public/auth.js
 node --check web/public/sw.js
+git diff --check
 ```
 
-For an authorized rollout, merge a verified PR and let the heartbeat update
-production. Check the native origin's `/healthz`, verify anonymous public requests
-reach the Access login, then exercise the authenticated UI and API. This tunnel's
-**remote configuration overrides `config.yml`**: fetch and edit only the intended
-remote ingress rule through Cloudflare MCP, preserving unrelated routes and the
-Access policy. Do not expose the origin before Access is confirmed.
+For a production rollout, follow the [cutover and rollback sequence](docs/dashboard-auth.md#production-cutover).
+Provision the private 1Password settings and verify first-party sign-in while the
+existing Access gate is still enabled. Remove only the reviewed Toolbox Access
+and connector checks after that verification. The tunnel's **remote configuration
+overrides `config.yml`**; preserve unrelated routes and the reusable private allow
+policy. A passing health endpoint alone does not establish that sign-in or the
+private application works.
 
 ## Requirements
 

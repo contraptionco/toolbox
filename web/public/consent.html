@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f3f0">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.philipithomas.com" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/auth.css">
+  <script src="/auth.js" defer></script>
+  <title>Connect an app · Toolbox</title>
+</head>
+<body class="auth-page" data-page="consent">
+  <header class="auth-header"><a href="/" class="wordmark" aria-label="Toolbox home"><img src="/icons/logo.svg" width="193" height="31" alt="Toolbox"></a><a class="auth-home" href="/">Machine room ↗</a></header>
+  <main class="auth-main">
+    <section class="auth-card" aria-labelledby="consent-title">
+      <p class="eyebrow">Read-only connection</p>
+      <h1 id="consent-title">Connect an app.</h1>
+      <p id="consent-client" class="auth-description">Loading connection details…</p>
+      <p id="consent-host" class="auth-footnote"></p>
+      <ul class="consent-permissions"><li>Read this Mac’s health and deployment status.</li><li>Read container inventory and resource usage.</li><li id="consent-logs" hidden>Read recent logs from configured sources.</li></ul>
+      <p class="auth-description">The app cannot run commands or change containers. You can disconnect it at any time in Sign-in & connections.</p>
+      <div class="consent-actions"><button id="consent-deny" class="auth-button" type="button" disabled>Cancel</button><button id="consent-approve" class="auth-button primary" type="button" disabled>Allow access ↗</button></div>
+    <p id="auth-message" class="auth-message" role="status" aria-live="polite" hidden></p>
+    <p id="auth-error" class="auth-error" role="alert" hidden></p>
+    <noscript><p class="auth-error">Enable JavaScript to sign in to Toolbox.</p></noscript>
+    </section>
+  </main>
+</body>
+</html>

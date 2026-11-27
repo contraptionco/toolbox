@@ -4,14 +4,18 @@ require 'fileutils'
 require_relative '../lib/dashboard/app'
 
 class DashboardAppTest < Minitest::Test
-  Request = Struct.new(:path, :request_method, :query, :headers) do
+  Request = Struct.new(:path, :request_method, :query, :headers, :body_value, :query_string) do
     def [](key) = headers[key]
+    def body = body_value
   end
 
   class Response
-    attr_accessor :status, :body
+    attr_accessor :status, :body, :keep_alive
     attr_reader :headers
-    def initialize = @headers = {}
+    def initialize
+      @headers = {}
+      @keep_alive = true
+    end
     def []=(key, value)
       @headers[key] = value
     end
@@ -36,15 +40,45 @@ class DashboardAppTest < Minitest::Test
     end
   end
 
-  class Access
+  class AuthHTTP
     attr_reader :calls
     attr_accessor :failure
     def initialize = @calls = []
-    def verify(token)
-      @calls << token
+    def call(_request, _response) = false
+    def session(request)
+      @calls << request['cookie']
       raise failure if failure
-      raise Dashboard::Access::Unauthorized unless token == 'fixture-token'
-      { 'sub' => 'fixture-user' }
+      return nil unless request['cookie'] == 'toolbox_session=fixture-token'
+      { email: 'philip@ilic.nyc', csrf_token: 'fixture-csrf', session_id: 'fixture-session' }
+    end
+  end
+
+  class OAuth
+    attr_reader :registrations, :consents, :decisions, :revocations
+    def initialize
+      @registrations, @consents, @decisions, @revocations = [], [], [], []
+    end
+    def authorization_metadata = { issuer: 'https://toolbox.example', authorization_endpoint: 'https://toolbox.example/oauth/authorize' }
+    def resource_metadata = { resource: 'https://toolbox.example/mcp', authorization_servers: ['https://toolbox.example'] }
+    def register_client(params)
+      @registrations << params
+      { client_id: 'fixture-client' }
+    end
+    def begin_authorization(params, subject:)
+      @consents << [params, subject]
+      { id: 'fixture-consent', client_name: 'Claude', client_origin: 'https://claude.ai', scopes: ['toolbox:read'] }
+    end
+    def complete_authorization(id, subject:, approve:)
+      @decisions << [id, subject, approve]
+      'https://claude.ai/api/mcp/auth_callback?code=fixture'
+    end
+    def grants(subject:) = [{ id: 'fixture-grant', client_name: 'Claude', scopes: ['toolbox:read'] }]
+    def revoke_grant(id, subject:)
+      @revocations << [id, subject]
+      true
+    end
+    def authenticate(_value)
+      raise Dashboard::OAuth::Error.new('invalid_token', 'Authentication required.', 401)
     end
   end
 
@@ -53,13 +87,14 @@ class DashboardAppTest < Minitest::Test
     @public = File.join(@directory, 'public')
     FileUtils.mkdir_p(@public)
     File.write(File.join(@public, 'index.html'), '<h1>Fixture</h1>')
+    %w[login security consent].each { |name| File.write(File.join(@public, name + '.html'), '<h1>' + name + '</h1>') }
     File.write(File.join(@public, 'sw.js'), 'self.addEventListener("fetch", () => {});')
     File.write(File.join(@directory, 'secret.html'), 'private fixture secret')
     File.symlink(File.join(@directory, 'secret.html'), File.join(@public, 'escape.html'))
     @collector = Collector.new
-    @access = Access.new
+    @auth_http, @oauth = AuthHTTP.new, OAuth.new
     @now = 0
-    @app = Dashboard::App.new(collector: @collector, access: @access,
+    @app = Dashboard::App.new(collector: @collector, auth_http: @auth_http, oauth: @oauth, origin: 'https://toolbox.example',
                              public_dir: @public, revision: 'fixture-sha', clock: -> { @now })
   end
 
@@ -67,19 +102,33 @@ class DashboardAppTest < Minitest::Test
     FileUtils.remove_entry(@directory)
   end
 
-  def test_unauthenticated_requests_never_collect_host_data_or_serve_assets
-    ['/', '/api/status', '/api/logs', '/sw.js'].each do |path|
+  def test_unauthenticated_requests_never_collect_host_data
+    ['/api/status', '/api/logs'].each do |path|
       response = request(path, token: nil)
       assert_equal 401, response.status
-      assert_equal 'Cloudflare Access login required', JSON.parse(response.body)['error']
+      assert_equal 'Toolbox sign-in required', JSON.parse(response.body)['error']
       assert_no_store(response)
+    end
+    ['/', '/security', '/security.html', '/index.html', '/consent.html'].each do |path|
+      response = request(path, token: nil)
+      assert_equal 303, response.status
+      assert_equal 'https://toolbox.example/login?next=' + URI.encode_www_form_component(path), response['Location']
+      refute_includes response.body, 'Fixture'
     end
     assert_equal 0, @collector.snapshot_calls
     assert_empty @collector.log_calls
   end
 
+  def test_login_and_generic_assets_are_public_without_collecting_host_data
+    assert_equal 200, request('/login', token: nil).status
+    assert_equal 200, request('/sw.js', token: nil).status
+    assert_empty @auth_http.calls
+    assert_equal 0, @collector.snapshot_calls
+    assert_empty @collector.log_calls
+  end
+
   def test_authentication_outage_fails_closed_without_collecting
-    @access.failure = Dashboard::Access::Unavailable.new('secret diagnostics')
+    @auth_http.failure = IOError.new('secret diagnostics')
     response = request('/api/status')
     assert_equal 503, response.status
     refute_includes response.body, 'secret diagnostics'
@@ -93,10 +142,36 @@ class DashboardAppTest < Minitest::Test
     assert_equal 1, @collector.snapshot_calls
     assert_equal 401, request('/api/status', token: nil).status
     assert_equal 1, @collector.snapshot_calls
-    assert_equal 3, @access.calls.length
+    assert_equal 3, @auth_http.calls.length
     @now = 10
     assert_equal 200, request('/api/status').status
     assert_equal 2, @collector.snapshot_calls
+  end
+
+  def test_running_dashboard_revision_does_not_follow_checkout_or_mutate_collector_evidence
+    checkout = 'b' * 40
+    running = 'a' * 40
+    evidence = { status: 'stale', commit: checkout, checkout_commit: checkout, dashboard_commit: 'untrusted-collector-value' }.freeze
+    sample = { deployment: evidence, log_sources: [] }.freeze
+    @collector.define_singleton_method(:snapshot) { sample }
+    @app = Dashboard::App.new(collector: @collector, auth_http: @auth_http, oauth: @oauth,
+      origin: 'https://toolbox.example', public_dir: @public, revision: running, clock: -> { @now })
+    [0, 11].each do |at|
+      @now = at
+      deployment = JSON.parse(request('/api/status').body).fetch('deployment')
+      assert_equal running, deployment['dashboard_commit']
+      assert_equal checkout, deployment['checkout_commit']
+      assert_equal checkout, deployment['commit']
+      assert_equal 'stale', deployment['status']
+    end
+    assert_equal 'untrusted-collector-value', evidence[:dashboard_commit]
+  end
+
+  def test_runtime_revision_does_not_make_missing_heartbeat_evidence_healthy
+    deployment = JSON.parse(request('/api/status').body).fetch('deployment')
+    assert_equal 'fixture-sha', deployment['dashboard_commit']
+    refute deployment.key?('status')
+    refute deployment.key?('commit')
   end
 
   def test_log_sources_are_allowlisted_before_the_collector_receives_them
@@ -124,7 +199,7 @@ class DashboardAppTest < Minitest::Test
     @now = 3
     assert_equal 200, request('/api/logs', query: query).status
     assert_equal 2, @collector.log_calls.length
-    assert_equal 3, @access.calls.length
+    assert_equal 3, @auth_http.calls.length
   end
 
   def test_static_paths_cannot_escape_public_directory
@@ -147,7 +222,7 @@ class DashboardAppTest < Minitest::Test
     assert_equal 200, response.status
     assert_equal({ 'ok' => true, 'revision' => 'fixture-sha' }, JSON.parse(response.body))
     assert_equal 0, @collector.snapshot_calls
-    assert_empty @access.calls
+    assert_empty @auth_http.calls
   end
 
   def test_response_security_headers_and_authenticated_static_assets
@@ -167,21 +242,102 @@ class DashboardAppTest < Minitest::Test
     @collector.failure = IOError.new('failure /private/secret TOKEN=private-value')
     response = request('/api/status')
     assert_equal 503, response.status
-    assert_equal 'Metrics are temporarily unavailable', JSON.parse(response.body)['error']
+    assert_equal 'Toolbox is temporarily unavailable', JSON.parse(response.body)['error']
     refute_includes response.body, 'private-value'
     assert_no_store(response)
   end
 
+  def test_untrusted_host_and_old_cloudflare_headers_cannot_authenticate
+    assert_equal 421, request('/api/status', headers: { 'host' => 'attacker.example' }).status
+    assert_empty @auth_http.calls
+    response = request('/api/status', token: nil, headers: { 'cf-access-jwt-assertion' => 'fixture-token', 'x-forwarded-host' => 'toolbox.example' })
+    assert_equal 401, response.status
+    assert_equal 401, request('/api/status', token: nil, headers: { 'authorization' => 'Bearer fixture' }).status
+    assert_equal 0, @collector.snapshot_calls
+  end
+
+  def test_discovery_is_public_but_a_browser_cookie_cannot_open_mcp
+    metadata = request('/.well-known/oauth-protected-resource/mcp', token: nil)
+    assert_equal 200, metadata.status
+    assert_equal 'https://toolbox.example/mcp', JSON.parse(metadata.body)['resource']
+    assert_equal 200, request('/.well-known/oauth-authorization-server', token: nil).status
+    assert_equal 405, request('/.well-known/oauth-authorization-server', method: 'POST').status
+    response = request('/mcp', method: 'POST', data: { jsonrpc: '2.0', method: 'tools/list', id: 1 })
+    assert_equal 401, response.status
+    assert_includes response['WWW-Authenticate'], 'oauth-protected-resource/mcp'
+    assert_empty @auth_http.calls
+    assert_equal 0, @collector.snapshot_calls
+  end
+
+  def test_oauth_login_redirect_preserves_original_authorization_query
+    query = { 'client_id' => 'fixture-client', 'state' => 'opaque state' }
+    response = request('/oauth/authorize', token: nil, query: query)
+    assert_equal 303, response.status
+    next_path = URI.decode_www_form(URI(response['Location']).query).to_h.fetch('next')
+    assert_equal '/oauth/authorize?' + URI.encode_www_form(query), next_path
+    assert_empty @oauth.consents
+  end
+
+  def test_consent_creation_requires_owner_session_and_same_origin_fetch
+    assert_equal 401, request('/oauth/consent', token: nil).status
+    assert_equal 403, request('/oauth/consent', headers: { 'sec-fetch-site' => 'cross-site' }).status
+    assert_equal 403, request('/oauth/consent', headers: { 'origin' => 'https://evil.example' }).status
+    assert_empty @oauth.consents
+    query = { 'client_id' => 'fixture-client' }
+    assert_equal 200, request('/oauth/consent', query: query, headers: { 'sec-fetch-site' => 'same-origin' }).status
+    assert_equal [[query, 'philip@ilic.nyc']], @oauth.consents
+    assert_equal 0, @collector.snapshot_calls
+  end
+
+  def test_consent_decisions_and_revocation_require_session_origin_and_csrf
+    data = { id: 'fixture-consent', approve: true }
+    assert_equal 401, request('/oauth/authorize', token: nil, method: 'POST', data: data).status
+    assert_equal 403, request('/oauth/authorize', method: 'POST', data: data).status
+    assert_equal 403, request('/oauth/authorize', method: 'POST', data: data, headers: { 'origin' => 'https://toolbox.example', 'x-csrf-token' => 'wrong' }).status
+    assert_equal 403, request('/oauth/authorize', method: 'POST', data: data, headers: { 'origin' => 'https://evil.example', 'x-csrf-token' => 'fixture-csrf' }).status
+    assert_empty @oauth.decisions
+    headers = { 'origin' => 'https://toolbox.example', 'x-csrf-token' => 'fixture-csrf' }
+    response = request('/oauth/authorize', method: 'POST', data: data, headers: headers)
+    assert_equal 200, response.status
+    assert_equal [[data[:id], 'philip@ilic.nyc', true]], @oauth.decisions
+    assert_equal 'https://claude.ai/api/mcp/auth_callback?code=fixture', JSON.parse(response.body)['redirect']
+    assert_equal 400, request('/oauth/authorize', method: 'POST', data: { id: data[:id], approve: 'true' }, headers: headers).status
+    assert_equal 403, request('/oauth/connections/revoke', method: 'POST', data: { id: 'fixture-grant' }).status
+    assert_empty @oauth.revocations
+    assert_equal 200, request('/oauth/connections/revoke', method: 'POST', data: { id: 'fixture-grant' }, headers: headers).status
+    assert_equal [['fixture-grant', 'philip@ilic.nyc']], @oauth.revocations
+    assert_equal 0, @collector.snapshot_calls
+  end
+
+  def test_public_oauth_requests_are_bounded_and_registration_is_rate_limited
+    response = request('/oauth/register', token: nil, method: 'POST', raw: 'x' * 16_385)
+    assert_equal 413, response.status
+    assert_equal 'close', response['Connection']
+    assert_equal false, response.keep_alive
+    assert_equal 400, request('/oauth/token', token: nil, method: 'POST', raw: 'client_id=a&client_id=b', headers: { 'content-type' => 'application/x-www-form-urlencoded' }).status
+    assert_empty @oauth.registrations
+    @now = 60
+    10.times { assert_equal 201, request('/oauth/register', token: nil, method: 'POST', data: {}).status }
+    assert_equal 429, request('/oauth/register', token: nil, method: 'POST', data: {}).status
+    assert_equal 10, @oauth.registrations.length
+    @now = 120
+    assert_equal 201, request('/oauth/register', token: nil, method: 'POST', data: {}).status
+    assert_equal 0, @collector.snapshot_calls
+  end
+
   private
 
-  def request(path, token: 'fixture-token', query: {}, method: 'GET')
+  def request(path, token: 'fixture-token', query: {}, method: 'GET', headers: {}, data: nil, raw: nil)
     response = Response.new
-    @app.call(Request.new(path, method, query, { 'cf-access-jwt-assertion' => token }), response)
+    defaults = { 'host' => 'toolbox.example', 'cookie' => token && "toolbox_session=#{token}", 'content-type' => 'application/json' }
+    body = raw || (data.nil? ? '' : JSON.generate(data))
+    query_string = query.empty? ? nil : URI.encode_www_form(query)
+    @app.call(Request.new(path, method, query, defaults.merge(headers), body, query_string), response)
     response
   end
 
   def assert_no_store(response)
     assert_equal 'no-store, private', response['Cache-Control']
-    assert_equal 'Cookie, Cf-Access-Jwt-Assertion', response['Vary']
+    assert_equal 'Cookie, Authorization, Origin', response['Vary']
   end
 end

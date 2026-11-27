@@ -5,6 +5,8 @@ require 'fileutils'
 require 'rbconfig'
 require_relative 'production_guard'
 require_relative 'command_runner'
+require_relative 'one_password'
+require_relative 'dashboard/settings'
 require_relative '../config'
 
 module Core
@@ -21,9 +23,10 @@ module Core
 
     def initialize(repo_dir: File.expand_path('..', __dir__), home_dir: Config::HOME_DIR,
                    runner: Core::CommandRunner, health_reader: nil, sleeper: ->(seconds) { sleep(seconds) },
-                   uid: Process.uid, ruby: RbConfig.ruby)
+                   uid: Process.uid, ruby: RbConfig.ruby, credential_reader: nil)
       @repo, @home, @runner, @sleeper, @uid, @ruby = repo_dir, home_dir, runner, sleeper, uid, ruby
       @runtime = File.join(@repo, '.runtime', 'dashboard')
+      @credential_reader = credential_reader || -> { Core::OnePassword.get_item(Config::DASHBOARD.fetch(:auth_item), Config::DASHBOARD.fetch(:auth_field)) }
       @health_reader = health_reader || method(:health)
     end
 
@@ -35,6 +38,7 @@ module Core
       return true if @health_reader.call == revision
 
       FileUtils.mkdir_p(@runtime, mode: 0o700)
+      provision_authentication
       install_dependencies
       path = File.join(@home, 'Library', 'LaunchAgents', "#{LABEL}.plist")
       content = plist
@@ -84,6 +88,15 @@ module Core
     end
 
     private
+
+    def provision_authentication
+      raw = @credential_reader.call
+      settings = Dashboard::Settings.parse(raw)
+      atomic_write(File.join(@runtime, 'auth-config.json'), JSON.generate(settings))
+    rescue StandardError
+      # Credential-provider diagnostics may include secret fields or vault output.
+      raise 'Dashboard authentication configuration is unavailable; running service preserved'
+    end
 
     def bundle_environment
       { 'BUNDLE_GEMFILE' => File.join(@repo, 'Gemfile'), 'BUNDLE_PATH' => File.join(@runtime, 'gems'),

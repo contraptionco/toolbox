@@ -104,6 +104,35 @@ class HeartbeatScriptTest < Minitest::Test
     end
   end
 
+  def test_stdlib_fixture_does_not_preload_the_parent_ruby_bundle
+    Dir.mktmpdir do |repo|
+      prepare_fixture(repo)
+      poison = File.join(repo, 'dashboard-bundle.rb')
+      File.write(poison, "abort 'dashboard bundle leaked into heartbeat fixture'\n")
+      inherited = {
+        'BUNDLER_SETUP' => poison,
+        'BUNDLER_ORIG_BUNDLER_SETUP' => poison,
+        'GEM_HOME' => File.join(repo, 'other-ruby-gems'),
+        'GEM_PATH' => File.join(repo, 'other-ruby-gems')
+      }
+      original = inherited.keys.to_h { |key| [key, ENV[key]] }
+      inherited.each { |key, value| ENV[key] = value }
+      File.write(File.join(repo, 'lib', 'heartbeat_update.rb'), <<~RUBY)
+        abort 'bundle environment leaked' if ENV.keys.any? { |key| key.start_with?('BUNDLE_', 'BUNDLER_', 'GEM_') }
+        abort 'Bundler was loaded' if defined?(Bundler)
+        File.write(File.join(ARGV.fetch(0), 'invocations'), "fixture ran\\n")
+      RUBY
+
+      _stdout, stderr, status = Open3.capture3(heartbeat_env(repo), 'zsh', File.join(repo, 'heartbeat.sh'))
+
+      assert status.success?, stderr
+      assert_equal ["fixture ran"], File.readlines(File.join(repo, 'invocations'), chomp: true)
+      refute File.exist?(File.join(repo, '.heartbeat.lock'))
+    ensure
+      original&.each { |key, value| ENV[key] = value }
+    end
+  end
+
   private
 
   def prepare_fixture(repo)
@@ -125,11 +154,12 @@ class HeartbeatScriptTest < Minitest::Test
   end
 
   def heartbeat_env(repo)
-    # The fixture's temporary HOME intentionally selects macOS's system Ruby.
-    # Do not inject the dashboard test bundle from another Ruby installation.
-    clean_bundle = ENV.keys.grep(/\ABUNDLE_/).to_h { |key| [key, nil] }
-    clean_bundle.merge(
-      'RUBYOPT' => nil, 'RUBYLIB' => nil,
+    # The heartbeat resets PATH and may select a different Ruby from the test
+    # runner. RubyGems also preloads BUNDLER_SETUP without RUBYOPT, so clear both
+    # Bundler prefixes and gem paths for these stdlib-only subprocess fixtures.
+    clean_ruby = ENV.keys.grep(/\A(?:BUNDLE(?:R)?_|GEM_)/).to_h { |key| [key, nil] }
+    clean_ruby.merge(
+      'RUBYOPT' => nil, 'RUBYLIB' => nil, 'RUBYGEMS_GEMDEPS' => nil,
       'TOOLBOX_REPO_DIR' => repo,
       'TOOLBOX_PRODUCTION_REPO_DIR' => repo,
       'TOOLBOX_HEARTBEAT_LOG' => File.join(repo, 'heartbeat.log')

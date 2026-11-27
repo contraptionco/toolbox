@@ -14,10 +14,11 @@ module Dashboard
     MAX_LOG_LINES = 200
     MAX_CONTAINERS = 128
     NAME = /\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\z/
-    SHA = /\A[0-9a-f]{40,64}\z/
+    SHA = /\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/
+    IMAGE_ID = /\Asha256:[0-9a-f]{64}\z/
     PS_FORMAT = '{"id":{{json .ID}},"name":{{json .Names}},"image":{{json .Image}},"state":{{json .State}},"status":{{json .Status}}}'.freeze
     STATS_FORMAT = '{"id":{{json .ID}},"name":{{json .Name}},"cpu":{{json .CPUPerc}},"memory":{{json .MemUsage}},"memory_percent":{{json .MemPerc}},"network":{{json .NetIO}},"block":{{json .BlockIO}},"pids":{{json .PIDs}}}'.freeze
-    INSPECT_FORMAT = '{"id":{{json .Id}},"started_at":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"health":{{with index .State "Health"}}{{json .Status}}{{else}}"none"{{end}}}'.freeze
+    INSPECT_FORMAT = '{"id":{{json .Id}},"image_id":{{json .Image}},"started_at":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"health":{{with index .State "Health"}}{{json .Status}}{{else}}"none"{{end}}}'.freeze
     HOST_PROCESSES = { 'netdata' => 'netdata', 'cloudflare-tunnel' => 'cloudflared' }.freeze
 
     class Unavailable < StandardError; end
@@ -37,7 +38,6 @@ module Dashboard
       @docker_disk_path = docker_disk_path || File.join(@home_dir, 'Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw')
       @log_paths = { 'heartbeat' => File.join(@repo_dir, 'heartbeat.log'),
                      'tunnel' => File.join(@repo_dir, 'tunnel.log') }.freeze
-      @applications = configured_applications.freeze
       @one_shot_containers = configured_one_shot_containers.freeze
     end
 
@@ -49,13 +49,15 @@ module Dashboard
       collect(errors, 'host memory') { host[:memory] = memory_usage }
       collect(errors, 'host load') { host.merge!(system_usage) }
       collect(errors, 'Docker disk') { host[:docker_disk] = docker_disk }
-      inventory_result = collect(errors, 'Docker inventory') { inventory }
+      bully_runtime = bully_pulpit_runtime
+      configured = configured_applications(bully_runtime)
+      inventory_result = collect(errors, 'Docker inventory') { inventory(configured) }
       containers = inventory_result || []
       if !containers.empty?
         collect(errors, 'container metrics') { add_stats(containers) }
         collect(errors, 'container state') { add_details(containers) }
       end
-      applications = @applications.map do |app|
+      applications = configured.map do |app|
         container = containers.find { |item| item[:name] == app[:container_name] }
         deployed = deployment_marker(app[:name]) if app[:type] == 'docker'
         app_status = if app[:status]
@@ -67,10 +69,11 @@ module Dashboard
                      elsif container && container[:state] == 'running'
                        'running'
                      else
-                       'stopped'
+                       app[:standby] ? 'standby' : 'stopped'
                      end
         app.merge(status: app_status, image: container&.dig(:image),
-                  started_at: container&.dig(:started_at), commit: deployed).compact
+                  started_at: container&.dig(:started_at), commit: deployed)
+           .merge(application_revision(app, container, deployed, app_status, bully_runtime)).compact
       end
       containers.each do |container|
         if container[:state] == 'running' && !container[:configured] && !container[:transient]
@@ -124,7 +127,7 @@ module Dashboard
 
     private
 
-    def configured_applications
+    def configured_applications(bully_runtime = bully_pulpit_runtime)
       direct = @config::DOCKER_SERVICES.map { |item| { name: item.fetch(:name), type: 'docker', container_name: item.fetch(:name), configured: true } }
       git = @config::GIT_SERVICES.filter_map do |item|
         container_name = if item[:container_config]
@@ -147,13 +150,99 @@ module Dashboard
       end
       host << { name: 'cloudflare-tunnel', type: 'host', configured: true } if @config.const_defined?(:TUNNEL_CONFIG) && @config::TUNNEL_CONFIG
       compose = @config.const_defined?(:COMPOSE_APPLICATIONS) ? @config::COMPOSE_APPLICATIONS.flat_map do |item|
-        next [] if item[:enabled_if] && !File.exist?(item[:enabled_if])
+        if item[:name] == 'bully-pulpit-production-analytics'
+          next [] unless bully_runtime[:analytics]
+        else
+          next [] if item[:enabled_if] && !File.exist?(item[:enabled_if])
+        end
 
         item.fetch(:containers).map do |name|
-          { name: name, type: 'docker', container_name: name, configured: true }
+          app = { name: name, type: 'docker', container_name: name, configured: true }
+          app[:standby] = true if item[:name] == 'bully-pulpit-pilot' && bully_runtime[:primary]
+          app
         end
       end : []
       direct + git + compose + host
+    end
+
+    # Interpret only non-secret release records from the configured runtime.
+    # These describe intended services/role, not current public route health.
+    def bully_pulpit_runtime
+      service = @config::GIT_SERVICES.find { |item| item[:name] == 'bully-pulpit-production' && item[:use_compose] }
+      return {} unless service && service[:compose_file].is_a?(String)
+
+      root = File.dirname(service[:compose_file])
+      copy = runtime_record(File.join(root, 'database-copy.json'))
+      enabled = runtime_record(File.join(root, 'enabled.json'))
+      deployed = runtime_record(File.join(root, 'deployment.json'))
+      current = runtime_record(service[:compose_file])
+      return {} unless copy && enabled && deployed && current
+      digest = copy['source_sha256']
+      return {} unless copy['verified'] == true && copy['application_database'] == 'bully_pulpit' &&
+                       digest.is_a?(String) && digest.match?(/\A[a-f0-9]{64}\z/) &&
+                       enabled['copy_sha256'] == digest && deployed['copy_sha256'] == digest &&
+                       %w[primary parallel].include?(deployed['role']) && safe_time(deployed['ready_at'])
+      baseline = service[:compose_readiness_services]
+      optional = service[:compose_optional_readiness_services] || []
+      recorded = deployed['compose']
+      return {} unless baseline.is_a?(Array) && optional.is_a?(Array) && recorded.is_a?(Hash)
+      manifests = [recorded, current]
+      requirements = manifests.map { |manifest| manifest.fetch('x-toolbox-required-services', baseline) }
+      return {} unless manifests.all? { |manifest| manifest['name'] == 'bully-pulpit-production' } &&
+                       requirements.all? { |required| required.is_a?(Array) && required.uniq == required &&
+                         (baseline - required).empty? && (required - baseline - optional).empty? } &&
+                       requirements.first.sort == requirements.last.sort
+
+      primary = runtime_record(File.join(root, 'primary.json'))
+      result = { primary: deployed['role'] == 'primary' && primary && primary['copy_sha256'] == digest,
+        analytics: deployed['analytics_protocol'].is_a?(Integer) && deployed['analytics_protocol'] == 1 &&
+                   requirements.first.include?('analytics') }
+      sha, image = deployed.values_at('application_sha', 'image')
+      if sha.is_a?(String) && sha.match?(SHA) && image.is_a?(String) && image.match?(IMAGE_ID)
+        result[:release] = { recorded_commit: sha, recorded_image_id: image, deployed_at: safe_time(deployed['ready_at']) }
+      end
+      result
+    end
+
+    def application_revision(app, container, last_successful, status, bully_runtime)
+      running = container && container[:state] == 'running'
+      evidence = if status == 'unknown' || app[:type] != 'docker'
+                   'unknown'
+                 elsif !running
+                   'not_running'
+                 elsif last_successful
+                   'last_successful_only'
+                 else
+                   'unknown'
+                 end
+      revision = { last_successful_commit: last_successful, running_image_id: running ? container[:image_id] : nil,
+                   revision_evidence: evidence }
+      same_release = app[:container_name] == 'bully-pulpit-production' ||
+                     (app[:container_name] == 'bully-pulpit-production-analytics' && bully_runtime[:analytics])
+      release = bully_runtime[:release] if same_release
+      return revision unless release
+
+      revision.merge!(release)
+      if running && container[:image_id]
+        if container[:image_id] == release[:recorded_image_id]
+          revision[:running_commit] = release[:recorded_commit]
+          revision[:revision_evidence] = 'image_match'
+        else
+          revision[:revision_evidence] = 'image_mismatch'
+        end
+      elsif running
+        revision[:revision_evidence] = 'unknown'
+      end
+      revision
+    end
+
+    def runtime_record(path)
+      raw = safe_read(path, 16_384)
+      return unless raw
+      value = JSON.parse(raw, max_nesting: 8)
+      value if value.is_a?(Hash)
+    rescue JSON::ParserError, JSON::NestingError, SystemCallError, IOError, Unavailable
+      nil
     end
 
     def configured_one_shot_containers
@@ -306,14 +395,14 @@ module Dashboard
       nil
     end
 
-    def inventory
+    def inventory(applications = configured_applications)
       output = command('docker', 'ps', '-a', '--no-trunc', '--format', PS_FORMAT)
       output.lines.first(MAX_CONTAINERS).filter_map do |line|
         row = object(line)
         id, name = row.values_at('id', 'name')
         next unless id.is_a?(String) && id.match?(/\A[0-9a-f]{12,64}\z/) && name.is_a?(String) && name.match?(NAME)
 
-        app = @applications.find { |item| item[:container_name] == name }
+        app = applications.find { |item| item[:container_name] == name }
         one_shot_app = @one_shot_containers[name]
         { id: id, name: name, image: Redactor.line(row['image']), state: safe_state(row['state']),
           status: Redactor.line(row['status']), configured: !app.nil? || !one_shot_app.nil?,
@@ -354,7 +443,9 @@ module Dashboard
         container = containers.find { |item| item[:id] == row['id'] }
         next unless container
 
-        container.merge!(started_at: safe_time(row['started_at']),
+        image_id = row['image_id']
+        container.merge!(image_id: image_id.is_a?(String) && image_id.match?(IMAGE_ID) ? image_id : nil,
+                         started_at: safe_time(row['started_at']),
                          restarts: row['restarts'].is_a?(Integer) && row['restarts'] >= 0 ? row['restarts'] : nil,
                          health: %w[healthy unhealthy starting none].include?(row['health']) ? row['health'] : 'unknown')
       end
@@ -366,8 +457,8 @@ module Dashboard
       collect(errors, 'Toolbox revision') do
         sha = command('git', '-C', @repo_dir, 'rev-parse', 'HEAD').strip
         branch = command('git', '-C', @repo_dir, 'symbolic-ref', '--quiet', '--short', 'HEAD').strip
-        deployment[:commit] = sha if sha.match?(SHA)
-        deployment[:branch] = branch if branch.match?(NAME)
+        deployment[:commit] = deployment[:checkout_commit] = sha if sha.match?(SHA)
+        deployment[:branch] = deployment[:checkout_branch] = branch if branch.match?(NAME)
       end
       marker = safe_read(File.join(@repo_dir, '.runtime/heartbeat-status.json'), 8192)
       return deployment unless marker
@@ -375,6 +466,8 @@ module Dashboard
       data = JSON.parse(marker)
       raise Unavailable unless data.is_a?(Hash)
 
+      heartbeat_commit = data['commit']
+      deployment[:heartbeat_commit] = heartbeat_commit if heartbeat_commit.is_a?(String) && heartbeat_commit.match?(SHA)
       status = data['status']
       status = 'unknown' unless %w[running healthy failed].include?(status)
       started = safe_time(data['started_at'])
@@ -407,7 +500,7 @@ module Dashboard
     end
 
     def safe_read(path, limit)
-      flags = File::RDONLY
+      flags = File::RDONLY | File::NONBLOCK
       flags |= File::NOFOLLOW if defined?(File::NOFOLLOW)
       File.open(path, flags) do |file|
         raise Unavailable unless file.stat.file? && file.stat.size <= limit
