@@ -14,7 +14,7 @@ class DashboardAuthTest < Minitest::Test
       @messages << message
     end
   end
-  Request = Struct.new(:path, :request_method, :headers, :body) do
+  Request = Struct.new(:path, :request_method, :headers, :body, :peeraddr) do
     def [](name) = headers[name]
   end
   class Response
@@ -100,7 +100,7 @@ class DashboardAuthTest < Minitest::Test
 
   def test_limits_and_sessions_survive_auth_restart
     token = login
-    4.times { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser) }
+    2.times { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser) }
     @auth = make_auth
     assert @auth.session(token)
     error = assert_raises(Dashboard::Auth::Error) { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser) }
@@ -110,16 +110,17 @@ class DashboardAuthTest < Minitest::Test
   end
 
   def test_global_email_limit_cannot_be_bypassed_by_rotating_browser_cookies
-    10.times { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: SecureRandom.hex(32)) }
+    10.times { |index| @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: SecureRandom.hex(32), client_key: "fixture-client-#{index}") }
     error = assert_raises(Dashboard::Auth::Error) { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: SecureRandom.hex(32)) }
     assert_equal 429, error.status
     assert_equal 10, @mail.messages.length
-    @store.with_db { |db| assert_equal 11, db.get_first_value('SELECT count(*) FROM auth_limits') }
+    assert_equal 10, rate_count('email-send-global')
+    @store.with_db { |db| assert_operator db.get_first_value('SELECT count(*) FROM auth_limits'), :<=, 44 }
   end
 
   def test_sessions_and_limits_survive_database_close_and_reopen
     token = login
-    4.times { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser) }
+    2.times { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser) }
     @store.close
     @store = Dashboard::AuthStore.new(path: @path)
     @auth = make_auth
@@ -271,6 +272,174 @@ class DashboardAuthTest < Minitest::Test
     assert_empty @mail.messages
   end
 
+  def test_invalid_emails_do_not_spend_owner_delivery_quota
+    30.times { @auth.request_email(email: 'other@example.test', browser_token: SecureRandom.hex(32), client_key: 'attacker') }
+    error = assert_raises(Dashboard::Auth::Error) { @auth.request_email(email: 'other@example.test', browser_token: SecureRandom.hex(32), client_key: 'attacker') }
+    assert_equal 429, error.status
+    assert_nil rate_count('email-send-global')
+    @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser, client_key: 'owner')
+    assert_equal 1, @mail.messages.length
+    assert_equal 1, rate_count('email-send-global')
+  end
+
+  def test_owner_code_survives_another_browser_request_and_exhausted_mail_budget
+    @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser, client_key: 'owner')
+    owner_code = @mail.messages.last[:code]
+    other = 'b' * 64
+    @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: other, client_key: 'other')
+    other_code = @mail.messages.last[:code]
+    8.times { |index| @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: SecureRandom.hex(32), client_key: "extra-#{index}") }
+    assert_equal 429, assert_raises(Dashboard::Auth::Error) { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: SecureRandom.hex(32), client_key: 'extra-blocked') }.status
+    owner_token = @auth.verify_email(email: Dashboard::Auth::EMAIL, code: owner_code, browser_token: @browser, client_key: 'owner')
+    other_token = @auth.verify_email(email: Dashboard::Auth::EMAIL, code: other_code, browser_token: other, client_key: 'other')
+    assert @auth.session(owner_token)
+    assert @auth.session(other_token)
+  end
+
+  def test_rotating_browser_cookies_cannot_spend_one_clients_entire_mail_budget
+    3.times { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: SecureRandom.hex(32), client_key: 'attacker') }
+    10.times do
+      error = assert_raises(Dashboard::Auth::Error) { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: SecureRandom.hex(32), client_key: 'attacker') }
+      assert_equal 429, error.status
+    end
+    assert_equal 3, rate_count('email-send-global')
+    @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser, client_key: 'owner')
+    assert_equal 4, @mail.messages.length
+  end
+
+  def test_rejected_passkey_client_does_not_exhaust_global_quota
+    60.times { @auth.authentication_options(browser_token: SecureRandom.hex(32), client_key: 'attacker') }
+    650.times do
+      assert_equal 429, assert_raises(Dashboard::Auth::Error) { @auth.authentication_options(browser_token: SecureRandom.hex(32), client_key: 'attacker') }.status
+    end
+    assert_equal 60, rate_count('passkey-login-global')
+    assert @auth.authentication_options(browser_token: @browser, client_key: 'owner')[:challenge]
+    assert_equal 61, rate_count('passkey-login-global')
+    @store.with_db { |db| assert_equal 61, db.get_first_value('SELECT count(*) FROM auth_challenges') }
+  end
+
+  def test_passkey_browser_limit_is_independent_of_client_and_mail_limits
+    30.times { |index| @auth.authentication_options(browser_token: @browser, client_key: "client-#{index}") }
+    assert_equal 429, assert_raises(Dashboard::Auth::Error) { @auth.authentication_options(browser_token: @browser, client_key: 'another') }.status
+    assert_equal 30, rate_count('passkey-login-global')
+    assert @auth.authentication_options(browser_token: 'b' * 64, client_key: 'another')[:challenge]
+  end
+
+  def test_bad_passkey_and_otp_verifications_do_not_block_other_clients
+    60.times do
+      assert_raises(Dashboard::Auth::Error) { @auth.verify_email(email: Dashboard::Auth::EMAIL, code: '000000', browser_token: SecureRandom.hex(32), client_key: 'attacker') }
+      assert_raises(Dashboard::Auth::Error) { @auth.authenticate_passkey(browser_token: SecureRandom.hex(32), response: {}, client_key: 'attacker') }
+    end
+    assert_equal 429, assert_raises(Dashboard::Auth::Error) { @auth.authenticate_passkey(browser_token: SecureRandom.hex(32), response: {}, client_key: 'attacker') }.status
+    assert_equal 429, assert_raises(Dashboard::Auth::Error) { @auth.verify_email(email: Dashboard::Auth::EMAIL, code: '000000', browser_token: SecureRandom.hex(32), client_key: 'attacker') }.status
+    assert_equal 60, rate_count('email-verify-global')
+    assert_equal 60, rate_count('passkey-verify-global')
+    client, _identity, handle = enroll
+    assert @auth.session(@auth.authenticate_passkey(browser_token: @browser, response: assertion(client, handle), client_key: 'owner'))
+  end
+
+  def test_rate_state_capacity_preserves_existing_limits_and_expires
+    @auth.rate_limit!('existing', limit: 5, seconds: 600)
+    @store.with_db do |db|
+      db.transaction do
+        (Dashboard::Auth::MAX_RATE_ROWS - 1).times do |index|
+          db.execute('INSERT INTO auth_limits(key,count,expires_at) VALUES(?,1,?)', [@auth.digest("seed-#{index}"), @clock.to_i + 600])
+        end
+      end
+    end
+    assert_equal 429, assert_raises(Dashboard::Auth::Error) { @auth.rate_limit!('new', limit: 5, seconds: 600) }.status
+    @auth.rate_limit!('existing', limit: 5, seconds: 600)
+    assert_equal 2, rate_count('existing')
+    @store.with_db { |db| assert_equal Dashboard::Auth::MAX_RATE_ROWS, db.get_first_value('SELECT count(*) FROM auth_limits') }
+    @clock += 601
+    @auth.rate_limit!('new', limit: 5, seconds: 600)
+    @store.with_db { |db| assert_equal 1, db.get_first_value('SELECT count(*) FROM auth_limits') }
+  end
+
+  def test_pending_codes_are_bounded_and_expired_rows_are_pruned
+    @store.with_db do |db|
+      Dashboard::Auth::MAX_PENDING_CODES.times do |index|
+        db.execute('INSERT INTO auth_login(browser_hash,owner,code_hash,expires_at,attempts) VALUES(?,?,?,?,0)', [@auth.digest("seed-#{index}"), Dashboard::Auth::EMAIL, 'fixture-hash', @clock.to_i + 600])
+      end
+    end
+    assert_equal 429, assert_raises(Dashboard::Auth::Error) { @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser) }.status
+    assert_empty @mail.messages
+    @store.with_db { |db| assert_equal Dashboard::Auth::MAX_PENDING_CODES, db.get_first_value('SELECT count(*) FROM auth_login') }
+    @clock += 601
+    @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser)
+    @store.with_db { |db| assert_equal 1, db.get_first_value('SELECT count(*) FROM auth_login') }
+  end
+
+  def test_passkey_challenge_capacity_allows_replacing_existing_browser_and_expires
+    @store.with_db do |db|
+      db.transaction do
+        Dashboard::Auth::MAX_CHALLENGES.times do |index|
+          browser = index.zero? ? @browser : "seed-#{index}"
+          db.execute('INSERT INTO auth_challenges(browser_hash,purpose,challenge,expires_at) VALUES(?,?,?,?)', [@auth.digest(browser), 'authentication', 'fixture-challenge', @clock.to_i + 300])
+        end
+      end
+    end
+    assert_equal 429, assert_raises(Dashboard::Auth::Error) { @auth.authentication_options(browser_token: 'b' * 64) }.status
+    assert @auth.authentication_options(browser_token: @browser)[:challenge]
+    @store.with_db { |db| assert_equal Dashboard::Auth::MAX_CHALLENGES, db.get_first_value('SELECT count(*) FROM auth_challenges') }
+    @clock += 301
+    assert @auth.authentication_options(browser_token: 'b' * 64)[:challenge]
+    @store.with_db { |db| assert_equal 1, db.get_first_value('SELECT count(*) FROM auth_challenges') }
+  end
+
+  def test_legacy_pending_code_schema_migration_preserves_sessions_and_passkeys
+    _client, identity, _handle, credential = enroll
+    @store.with_db do |db|
+      db.execute('DROP TABLE auth_login')
+      db.execute('CREATE TABLE auth_login (owner TEXT PRIMARY KEY, code_hash TEXT NOT NULL, browser_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)')
+      db.execute('INSERT INTO auth_login VALUES(?,?,?,?,0)', [Dashboard::Auth::EMAIL, 'legacy-hash', @auth.digest(@browser), @clock.to_i + 600])
+    end
+    @store.close
+    @store = Dashboard::AuthStore.new(path: @path)
+    @auth = make_auth
+    assert_equal credential['id'], @auth.passkeys.first[:id]
+    @store.with_db do |db|
+      assert_equal 1, db.get_first_value('SELECT count(*) FROM auth_sessions WHERE token_hash=?', [identity[:session_id]])
+      assert_equal 0, db.get_first_value('SELECT count(*) FROM auth_login')
+      assert_equal 'browser_hash', db.execute('PRAGMA table_info(auth_login)').find { |column| column['pk'] == 1 }['name']
+    end
+    assert @auth.session(login)
+  end
+
+  def test_cf_client_address_is_validated_and_only_trusted_from_loopback_in_production
+    request = Request.new('/auth/email', 'POST', {'cf-connecting-ip' => '2001:0db8:0000:0000:0000:0000:0000:0001'}, '{}', ['AF_INET', 12345, nil, '127.0.0.1'])
+    assert_equal '2001:db8::1', @http.send(:client_key, request)
+    request.headers['cf-connecting-ip'] = '2001:DB8::1'
+    assert_equal '2001:db8::1', @http.send(:client_key, request)
+    ['192.0.2.1, 192.0.2.2', '192.0.2.1/24', 'not-an-address', ' 192.0.2.1', ''].each do |invalid|
+      request.headers['cf-connecting-ip'] = invalid
+      assert_equal '127.0.0.1', @http.send(:client_key, request)
+    end
+    request.headers['cf-connecting-ip'] = '192.0.2.1'
+    request.peeraddr[3] = '198.51.100.20'
+    assert_equal '198.51.100.20', @http.send(:client_key, request)
+    demo = Dashboard::Auth.new(store: @store, origin: 'http://127.0.0.1:4179', secret: 'fixture-secret-' * 4, mailer: @mail)
+    request.peeraddr[3] = '127.0.0.1'
+    assert_equal '127.0.0.1', Dashboard::AuthHTTP.new(auth: demo).send(:client_key, request)
+  end
+
+  def test_http_client_limit_cannot_be_bypassed_with_new_browser_cookies
+    3.times do
+      browser = SecureRandom.hex(32)
+      headers = {'cookie' => "__Host-toolbox_browser=#{browser}", 'x-csrf-token' => @auth.csrf_token(browser), 'cf-connecting-ip' => '198.51.100.10'}
+      assert_equal 200, http('/auth/email', data: {email: Dashboard::Auth::EMAIL}, headers: headers).status
+    end
+    browser = SecureRandom.hex(32)
+    headers = {'cookie' => "__Host-toolbox_browser=#{browser}", 'x-csrf-token' => @auth.csrf_token(browser), 'cf-connecting-ip' => '198.51.100.10'}
+    assert_equal 429, http('/auth/email', data: {email: Dashboard::Auth::EMAIL}, headers: headers).status
+    headers['cf-connecting-ip'] = '198.51.100.11'
+    assert_equal 200, http('/auth/email', data: {email: Dashboard::Auth::EMAIL}, headers: headers).status
+  end
+
+  def rate_count(key)
+    @store.with_db { |db| db.get_first_value('SELECT count FROM auth_limits WHERE key=?', [@auth.digest(key)]) }
+  end
+
   def test_mailer_requires_tls_and_renders_multipart_without_header_injection
     assert_raises(ArgumentError) { Dashboard::Mailer.new(host: 'smtp.example', user: 'u', password: 'p', origin: 'https://toolbox.example', require_tls: false) }
     assert_raises(ArgumentError) { Dashboard::Mailer.new(host: 'smtp.example', user: 'u', password: 'p', origin: 'https://toolbox.example', from: "evil\r\nBcc: thief@example.test") }
@@ -282,8 +451,8 @@ class DashboardAuthTest < Minitest::Test
     refute_includes message, 'password'
   end
 
-  def http(path, method: 'POST', data: {}, raw: nil, headers: {})
-    request = Request.new(path, method, {'origin' => 'https://toolbox.example', 'content-type' => 'application/json'}.merge(headers), raw || JSON.generate(data))
+  def http(path, method: 'POST', data: {}, raw: nil, headers: {}, peer: '127.0.0.1')
+    request = Request.new(path, method, {'origin' => 'https://toolbox.example', 'content-type' => 'application/json'}.merge(headers), raw || JSON.generate(data), ['AF_INET', 12345, nil, peer])
     response = Response.new
     assert @http.call(request, response)
     assert_equal 'private, no-store', response['Cache-Control']

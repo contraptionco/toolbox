@@ -32,7 +32,7 @@ module Dashboard
           token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS auth_login (
-          owner TEXT PRIMARY KEY, code_hash TEXT NOT NULL, browser_hash TEXT NOT NULL,
+          browser_hash TEXT PRIMARY KEY, owner TEXT NOT NULL CHECK(owner = 'philip@ilic.nyc'), code_hash TEXT NOT NULL,
           expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS auth_limits (
@@ -48,6 +48,20 @@ module Dashboard
           last_used_at INTEGER
         );
       SQL
+      # Early development builds keyed pending OTPs by owner. Only these short-
+      # lived challenges are invalidated by the schema change; sessions, passkeys
+      # and OAuth grants remain intact. No production code/data reset is needed.
+      if @db.execute('PRAGMA table_info(auth_login)').any? { |column| column['name'] == 'owner' && column['pk'] == 1 }
+        @db.transaction do
+          @db.execute('DROP TABLE auth_login')
+          @db.execute(<<~SQL)
+            CREATE TABLE auth_login (
+              browser_hash TEXT PRIMARY KEY, owner TEXT NOT NULL CHECK(owner = 'philip@ilic.nyc'), code_hash TEXT NOT NULL,
+              expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0
+            )
+          SQL
+        end
+      end
     end
 
     def with_db

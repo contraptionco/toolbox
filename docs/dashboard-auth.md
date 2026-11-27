@@ -10,8 +10,19 @@ in production. Record those checks separately during the rollout.
 The dashboard has one owner: `philip@ilic.nyc`. The email address is enforced on
 the server; there is no registration or invitation endpoint. Email sign-in uses
 a six-digit code that expires after ten minutes and can be redeemed once in the
-browser that requested it. A code allows five incorrect attempts. Persisted
-request limits apply across browser cookies and service restarts.
+browser that requested it. A code allows five incorrect attempts. Requesting a
+code in one browser does not replace another browser's pending code. Persisted
+request limits apply per client and browser across service restarts; rejected
+client attempts do not spend the larger global request allowance.
+
+Outgoing email is limited to three sends per client, five per browser and ten
+overall per ten minutes. Invalid email addresses do not spend that delivery
+quota. Existing codes can still be verified when the send limit is reached, and
+passkey sign-in has independent limits. Rate-limit rows and pending challenges
+have fixed capacity bounds and expiry cleanup. Production derives the client
+address from Cloudflare's overwritten `CF-Connecting-IP` only for a loopback
+connection; malformed headers, non-loopback peers and demo mode use the peer
+address instead.
 
 After signing in, open **Sign-in & connections** at `/security`, name the device
 and select **Add a passkey**. The browser handles device confirmation. Passkeys

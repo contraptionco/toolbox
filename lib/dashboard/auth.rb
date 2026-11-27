@@ -12,6 +12,9 @@ module Dashboard
     EMAIL = 'philip@ilic.nyc'.freeze
     SESSION_SECONDS = 30 * 24 * 60 * 60
     RECENT_SECONDS = 15 * 60
+    MAX_RATE_ROWS = 4096
+    MAX_PENDING_CODES = 20
+    MAX_CHALLENGES = 2048
     TOKEN = /\A[a-f0-9]{64}\z/
     class Error < StandardError
       attr_reader :status
@@ -76,49 +79,51 @@ module Dashboard
     end
 
     def rate_limit!(key, limit:, seconds:)
-      count = @store.with_db do |db|
-        db.transaction do
-          db.execute('DELETE FROM auth_limits WHERE expires_at<=?', [now])
-          db.execute('INSERT INTO auth_limits(key,count,expires_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1', [digest(key), now + seconds])
-          db.get_first_value('SELECT count FROM auth_limits WHERE key=?', [digest(key)])
-        end
-      end
-      raise Error.new('Too many attempts. Please try again in a few minutes.', 429) if count > limit
+      rate_limits!([[key, limit]], seconds: seconds)
     end
 
-    def request_email(email:, browser_token:)
+    def request_email(email:, browser_token:, client_key: 'direct')
       raise Error.new('Invalid request') unless valid_token?(browser_token) && email.is_a?(String) && email.bytesize <= 254
+      public_limit!('email-request', client_key, browser_token, client_limit: 30, browser_limit: 30)
       email = email.strip.downcase
-      rate_limit!('email-global', limit: 10, seconds: 600)
-      rate_limit!("email-browser:#{browser_token}", limit: 5, seconds: 600)
       return true unless email == EMAIL
+      # Invalid addresses never consume the actual delivery quota. One client
+      # cannot exhaust the installation's mail budget by rotating browser cookies.
+      rate_limits!([["email-send-client:#{client_key}", 3], ["email-send-browser:#{browser_token}", 5], ['email-send-global', 10]])
       code = SecureRandom.random_number(1_000_000).to_s.rjust(6, '0')
-      hash = code_hash(code)
+      browser_hash = digest(browser_token)
+      hash = code_hash(code, browser_token)
       @store.with_db do |db|
-        db.execute('INSERT OR REPLACE INTO auth_login(owner,code_hash,browser_hash,expires_at,attempts) VALUES(?,?,?,?,0)', [EMAIL, hash, digest(browser_token), now + 600])
+        db.transaction do
+          db.execute('DELETE FROM auth_login WHERE expires_at<=?', [now])
+          existing = db.get_first_value('SELECT 1 FROM auth_login WHERE browser_hash=?', [browser_hash])
+          raise Error.new('Too many pending codes. Please try again later.', 429) if !existing && db.get_first_value('SELECT count(*) FROM auth_login') >= MAX_PENDING_CODES
+          db.execute('INSERT OR REPLACE INTO auth_login(owner,code_hash,browser_hash,expires_at,attempts) VALUES(?,?,?,?,0)', [EMAIL, hash, browser_hash, now + 600])
+        end
       end
       begin
         @mailer.send_code(email: EMAIL, code: code)
       rescue StandardError
-        @store.with_db { |db| db.execute('DELETE FROM auth_login WHERE code_hash=?', [hash]) }
+        @store.with_db { |db| db.execute('DELETE FROM auth_login WHERE browser_hash=? AND code_hash=?', [browser_hash, hash]) }
         raise Error.new('Email delivery is temporarily unavailable. Please try again.', 503)
       end
       true
     end
 
-    def verify_email(email:, code:, browser_token:)
-      rate_limit!('verify-global', limit: 40, seconds: 600)
+    def verify_email(email:, code:, browser_token:, client_key: 'direct')
+      public_limit!('email-verify', client_key, browser_token, client_limit: 60, browser_limit: 20)
       raise Error, 'That code is invalid or expired. Request a new one.' unless email.is_a?(String) && email.strip.downcase == EMAIL && code.is_a?(String) && code.match?(/\A\d{6}\z/) && valid_token?(browser_token)
       token = @store.with_db do |db|
         db.transaction do
-          row = db.get_first_row('SELECT * FROM auth_login WHERE owner=? AND expires_at>? AND attempts<5', [EMAIL, now])
-          if !row || !equal?(row['browser_hash'], digest(browser_token))
+          browser_hash = digest(browser_token)
+          row = db.get_first_row('SELECT * FROM auth_login WHERE owner=? AND browser_hash=? AND expires_at>? AND attempts<5', [EMAIL, browser_hash, now])
+          if !row
             nil
-          elsif !equal?(row['code_hash'], code_hash(code))
-            db.execute('UPDATE auth_login SET attempts=attempts+1 WHERE owner=?', [EMAIL])
+          elsif !equal?(row['code_hash'], code_hash(code, browser_token))
+            db.execute('UPDATE auth_login SET attempts=attempts+1 WHERE browser_hash=?', [browser_hash])
             nil
           else
-            db.execute('DELETE FROM auth_login WHERE owner=?', [EMAIL])
+            db.execute('DELETE FROM auth_login WHERE browser_hash=?', [browser_hash])
             issue_session(db)
           end
         end
@@ -163,15 +168,15 @@ module Dashboard
       raise Error, 'That passkey is already registered.'
     end
 
-    def authentication_options(browser_token:)
-      rate_limit!('passkey-login', limit: 30, seconds: 600)
+    def authentication_options(browser_token:, client_key: 'direct')
+      public_limit!('passkey-login', client_key, browser_token, client_limit: 60, browser_limit: 30)
       options = @rp.options_for_authentication(user_verification: 'required')
       store_challenge(browser_token, 'authentication', options.challenge, nil)
       options.as_json
     end
 
-    def authenticate_passkey(browser_token:, response:)
-      rate_limit!('passkey-verify', limit: 30, seconds: 600)
+    def authenticate_passkey(browser_token:, response:, client_key: 'direct')
+      public_limit!('passkey-verify', client_key, browser_token, client_limit: 60, browser_limit: 30)
       validate_credential!(response)
       challenge = consume_challenge(browser_token, 'authentication', nil)
       handle = response.dig('response', 'userHandle')
@@ -207,7 +212,39 @@ module Dashboard
 
     private
 
-    def code_hash(code) = OpenSSL::HMAC.hexdigest('SHA256', @secret, "otp:#{EMAIL}:#{code}")
+    # Admit all counters atomically. Rejected per-client/browser attempts do not
+    # spend the global allowance or create more rows. Persisted limits survive
+    # restarts; capacity never evicts an active limit and enables a bypass.
+    def rate_limits!(limits, seconds: 600)
+      @store.with_db do |db|
+        db.transaction do
+          db.execute('DELETE FROM auth_limits WHERE expires_at<=?', [now])
+          keys = limits.map do |key, limit|
+            hashed = digest(key)
+            count = db.get_first_value('SELECT count FROM auth_limits WHERE key=?', [hashed])
+            raise Error.new('Too many attempts. Please try again in a few minutes.', 429) if count && count >= limit
+            [hashed, count]
+          end
+          fresh = keys.count { |_key, count| count.nil? }
+          if fresh.positive? && db.get_first_value('SELECT count(*) FROM auth_limits') + fresh > MAX_RATE_ROWS
+            raise Error.new('Sign-in is busy. Please try again in a few minutes.', 429)
+          end
+          keys.each do |key, _count|
+            db.execute('INSERT INTO auth_limits(key,count,expires_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1', [key, now + seconds])
+          end
+        end
+      end
+    end
+
+    def public_limit!(endpoint, client_key, browser_token, client_limit:, browser_limit:)
+      raise Error, 'Please reload the sign-in page.' unless valid_token?(browser_token)
+      raise Error, 'Invalid request client.' unless client_key.is_a?(String) && client_key.bytesize.between?(1, 100)
+      rate_limits!([["#{endpoint}-client:#{client_key}", client_limit],
+                    ["#{endpoint}-browser:#{browser_token}", browser_limit],
+                    ["#{endpoint}-global", 600]])
+    end
+
+    def code_hash(code, browser_token) = OpenSSL::HMAC.hexdigest('SHA256', @secret, "otp:#{EMAIL}:#{browser_token}:#{code}")
     def active_session?(db, id) = !!db.get_first_value('SELECT 1 FROM auth_sessions WHERE token_hash=? AND expires_at>?', [id, now])
     def issue_session(db)
       db.execute('DELETE FROM auth_sessions WHERE expires_at<=?', [now])
@@ -225,6 +262,8 @@ module Dashboard
       raise Error, 'Please reload the sign-in page.' unless valid_token?(browser_token)
       @store.with_db do |db|
         db.execute('DELETE FROM auth_challenges WHERE expires_at<=?', [now])
+        existing = db.get_first_value('SELECT 1 FROM auth_challenges WHERE browser_hash=? AND purpose=?', [digest(browser_token), purpose])
+        raise Error.new('Too many pending passkey requests. Please try again later.', 429) if !existing && db.get_first_value('SELECT count(*) FROM auth_challenges') >= MAX_CHALLENGES
         db.execute('INSERT OR REPLACE INTO auth_challenges(browser_hash,purpose,challenge,session_id,expires_at) VALUES(?,?,?,?,?)', [digest(browser_token), purpose, challenge, session_id, now + 300])
       end
     end

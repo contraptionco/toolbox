@@ -1,5 +1,6 @@
 require 'json'
 require 'securerandom'
+require 'ipaddr'
 require 'webrick/cookie'
 require_relative 'auth'
 require_relative 'http_body'
@@ -57,12 +58,13 @@ module Dashboard
       input = read_json(request)
       browser = cookie(request, @browser_cookie)
       identity = session(request)
+      client = client_key(request)
       case request.path
       when '/auth/email'
-        @auth.request_email(email: input['email'], browser_token: browser)
+        @auth.request_email(email: input['email'], browser_token: browser, client_key: client)
         json(response, 200, ok: true, message: 'If this email is allowed, a sign-in code is on its way.')
       when '/auth/verify'
-        token = @auth.verify_email(email: input['email'], code: input['code'], browser_token: browser)
+        token = @auth.verify_email(email: input['email'], code: input['code'], browser_token: browser, client_key: client)
         @auth.revoke_session(cookie(request, @session_cookie))
         set_cookie(response, @session_cookie, token, Auth::SESSION_SECONDS)
         json(response, 200, ok: true)
@@ -80,9 +82,9 @@ module Dashboard
         @auth.register_passkey(browser_token: browser, identity: identity, response: input['response'], name: input.fetch('name', 'My passkey'))
         json(response, 200, ok: true)
       when '/auth/passkey/login/options'
-        json(response, 200, @auth.authentication_options(browser_token: browser))
+        json(response, 200, @auth.authentication_options(browser_token: browser, client_key: client))
       when '/auth/passkey/login/verify'
-        token = @auth.authenticate_passkey(browser_token: browser, response: input['response'])
+        token = @auth.authenticate_passkey(browser_token: browser, response: input['response'], client_key: client)
         @auth.revoke_session(cookie(request, @session_cookie))
         set_cookie(response, @session_cookie, token, Auth::SESSION_SECONDS)
         json(response, 200, ok: true)
@@ -107,6 +109,21 @@ module Dashboard
     end
 
     private
+
+    def client_key(request)
+      peer = parse_address(request.respond_to?(:peeraddr) ? request.peeraddr&.[](3) : nil)
+      # Production binds only to loopback and Cloudflare overwrites this header.
+      # Never trust forwarded client identity from a non-loopback peer or in demo.
+      forwarded = parse_address(request['cf-connecting-ip']) if @auth.secure? && peer&.loopback?
+      (forwarded || peer)&.to_s || 'unknown'
+    end
+
+    def parse_address(value)
+      return nil unless value.is_a?(String) && value.bytesize.between?(2, 45) && value.match?(/\A[0-9A-Fa-f:.]+\z/)
+      IPAddr.new(value)
+    rescue IPAddr::InvalidAddressError
+      nil
+    end
 
     def cookie(request, name)
       matches = request['cookie'].to_s.split(';').filter_map do |part|
