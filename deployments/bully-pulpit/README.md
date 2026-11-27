@@ -187,3 +187,49 @@ python3 deployments/bully-pulpit/test_proxy.py
 The second command is an opt-in isolated nginx test with unique disposable
 containers, an ephemeral loopback port, and no production networks/data/secrets.
 Do not run deployment scripts against real services to test code changes.
+
+## Local analytics
+
+Application releases containing the exact `services/analytics/capabilities.json`
+manifest `{"protocol":1}`, the service entrypoint, and the locked DuckDB dependency
+include `analytics.compose.yml` in the frozen release. Older application commits
+retain their existing app/proxy/scheduler deployment. Either repository's PR can
+land first without trying to run an executable absent from the image. The frozen
+Compose wrapper records its required services; readiness is re-read after prepare
+and restored together with that wrapper on rollback.
+
+The `bully-pulpit-production-analytics` companion is the sole DuckDB writer. It
+runs the same immutable application image as the host UID/GID with a read-only
+root, a 1 GiB memory cap, one CPU, bounded temporary space and logs, and no
+published ports. Only the app and analytics join its internal network; it cannot
+join PostgreSQL's network or use the app's provider credentials. The app does not
+need analytics to serve pages, but Toolbox requires a healthy analytics service
+before recording an analytics-capable release as healthy.
+
+Preparation creates `analytics/` under the private runtime root with mode 0700,
+checks ownership and writeability, and refuses existing insecure paths instead of
+changing their ownership. DuckDB and its WAL persist there across image changes.
+A random service-only bearer token is created once in `secrets/analytics.env`
+(mode 0600). It is reused and frozen into the release's separate `analytics.env`;
+only the app and analytics receive it. It never enters image build arguments,
+source, deployment records, or the scheduler/migration service. Token rotation is
+a separate coordinated operation. No new vault value is required.
+
+The service checkpoints and takes an atomic, fsynced snapshot at startup and each
+24 hours, retaining seven snapshots under `analytics/backups/`; its authenticated
+`/v1/backup` endpoint can request another consistent snapshot. Health reports the
+last snapshot outcome without event data. These are **same-host recovery copies**,
+not disaster recovery: the existing PostgreSQL/S3 job does not include DuckDB.
+Off-host encrypted replication must be configured separately before claiming
+protection from host loss. Restore verification is covered with temporary real
+DuckDB databases in the application tests. For an operational restore, stop only
+the analytics writer, preserve its current database and WAL, verify a chosen
+snapshot in an isolated temporary database with the matching image, then replace
+the database and restart that service. Never copy a live DuckDB file or mix a
+snapshot with an unrelated WAL, and never restore application Postgres to repair
+analytics.
+
+Default event retention is 730 days. Backups retain up to seven further days;
+account erasure removes linked events and invalidates prior local snapshots in
+the service. Raw IPs, browser identifiers and identified session histories remain
+admin-only. No Cloudflare ingress or public analytics service route is added.

@@ -88,6 +88,45 @@ def freeze_files(directory, contents):
         if name in ('nginx.conf', 'scheduler.py'): path.chmod(0o644)
 
 
+def analytics_capable(source):
+    marker = source / 'services/analytics/capabilities.json'
+    if not marker.exists():
+        return False
+    if marker.is_symlink():
+        raise RuntimeError('Unsupported analytics capability manifest')
+    capability = json.loads(marker.read_text())
+    if capability != {'protocol': 1} or type(capability.get('protocol')) is not int:
+        raise RuntimeError('Unsupported analytics capability manifest')
+    entrypoint = source / 'services/analytics/server.ts'
+    package = json.loads((source / 'package.json').read_text())
+    if (entrypoint.is_symlink() or not entrypoint.is_file()
+            or not package.get('dependencies', {}).get('@duckdb/node-api')):
+        raise RuntimeError('Analytics capability is missing its runtime implementation')
+    return True
+
+
+def prepare_analytics(root):
+    directory = root / 'analytics'
+    if directory.is_symlink() or any(parent.is_symlink() for parent in directory.parents):
+        raise RuntimeError('Analytics data directory must not use symbolic links')
+    directory.mkdir(mode=0o700, exist_ok=True)
+    if directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
+        raise RuntimeError('Analytics data directory must be owned by the deploy user and private (0700)')
+    # The service uses this host UID/GID. Probe only the analytics directory,
+    # never change ownership or permissions on an existing runtime directory.
+    probe = directory / ('.write-check-' + os.urandom(8).hex())
+    fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    os.close(fd)
+    probe.unlink()
+    path = root / 'secrets/analytics.env'
+    if not path.exists():
+        secret_rules.write_private(path, 'ANALYTICS_TOKEN=' + os.urandom(32).hex() + '\n')
+    env = read_env(path)
+    if set(env) != {'ANALYTICS_TOKEN'} or not re.fullmatch(r'[a-f0-9]{64}', env['ANALYTICS_TOKEN']):
+        raise RuntimeError('Analytics environment must contain only its dedicated token')
+    return 'ANALYTICS_TOKEN=' + env['ANALYTICS_TOKEN'] + '\n'
+
+
 def prepare(root=ROOT, source=None, environ=None):
     environ = os.environ if environ is None else environ
     source = Path.cwd() if source is None else Path(source)
@@ -106,7 +145,11 @@ def prepare(root=ROOT, source=None, environ=None):
     scheduler.mkdir(mode=0o700, exist_ok=True)
     secret_rules.write_private(root / 'secrets/scheduler.env',
                                'DEPLOYMENT_ROLE=' + env['DEPLOYMENT_ROLE'] + '\nCRON_SECRET=' + env['CRON_SECRET'] + '\n')
+    analytics_enabled = analytics_capable(source)
+    analytics_env = prepare_analytics(root) if analytics_enabled else None
     contents = {name: (HERE / name).read_text() for name in ('compose.yml', 'nginx.conf', 'scheduler.py')}
+    if analytics_enabled:
+        contents['analytics.compose.yml'] = (HERE / 'analytics.compose.yml').read_text()
     public = {key: env[key] for key in PUBLIC_BUILD_KEYS if env.get(key)}
     identity = hashlib.sha256(json.dumps({'sha': sha, 'files': contents, 'public': public}, sort_keys=True).encode()).hexdigest()
     build_directory = root / 'builds' / identity
@@ -136,15 +179,21 @@ def prepare(root=ROOT, source=None, environ=None):
     release_env = '\n'.join([
         'BULLY_RUNTIME_DIR=' + str(root), 'BULLY_IMAGE=' + image_id,
         'BULLY_HOST_UID=' + str(os.getuid()), 'BULLY_HOST_GID=' + str(os.getgid()), ''])
-    freeze_files(infra, {**contents, 'release.env': release_env})
-    compose = {'name': 'bully-pulpit-production', 'include': [{
-        'path': str(infra / 'compose.yml'), 'project_directory': str(infra),
+    frozen = {**contents, 'release.env': release_env}
+    if analytics_env is not None:
+        frozen['analytics.env'] = analytics_env
+    freeze_files(infra, frozen)
+    paths = [str(infra / 'compose.yml'), str(infra / 'analytics.compose.yml')] if analytics_enabled else str(infra / 'compose.yml')
+    required_services = ['app', 'proxy', 'scheduler'] + (['analytics'] if analytics_enabled else [])
+    compose = {'name': 'bully-pulpit-production', 'x-toolbox-required-services': required_services, 'include': [{
+        'path': paths, 'project_directory': str(infra),
         'env_file': str(infra / 'release.env'),
     }]}
     atomic_record(root / 'compose.json', compose)
     atomic_record(root / 'pending-deployment.json', {
         'application_sha': sha, 'image': image_id, 'infrastructure': str(infra),
         'compose': compose, 'copy_sha256': digest, 'role': env['DEPLOYMENT_ROLE'],
+        'analytics_protocol': 1 if analytics_enabled else None,
         'prepared_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
     })
     print('Prepared immutable Bully Pulpit release; Compose will apply migrations and verify readiness')

@@ -102,10 +102,11 @@ module Config
       env_file_path: "#{DATA_DIR}/bully-pulpit/secrets/app.env",
       build_cmd: "python3 #{CODE_DIR}/toolbox/deployments/bully-pulpit/deploy.py prepare",
       release_environment: true,
-      release_inputs: %w[compose.yml nginx.conf scheduler.py deploy.py secrets.py].map { |file| "#{CODE_DIR}/toolbox/deployments/bully-pulpit/#{file}" },
+      release_inputs: %w[compose.yml analytics.compose.yml nginx.conf scheduler.py deploy.py secrets.py].map { |file| "#{CODE_DIR}/toolbox/deployments/bully-pulpit/#{file}" },
       use_compose: true,
       compose_file: "#{DATA_DIR}/bully-pulpit/compose.json",
       compose_readiness_services: %w[app proxy scheduler],
+      compose_optional_readiness_services: %w[analytics],
       after_deploy_command: "python3 #{CODE_DIR}/toolbox/deployments/bully-pulpit/deploy.py record",
       dashboard: {
         container_name: 'bully-pulpit-production',
@@ -298,7 +299,8 @@ module Config
   # them. The parallel Bully Pulpit release follows a reviewed branch SHA.
   COMPOSE_APPLICATIONS = [
     { name: 'bully-pulpit-pilot', containers: ['bully-pulpit', 'bully-pulpit-postgres', 'bully-pulpit-proxy'] },
-    { name: 'bully-pulpit-production-companions', containers: ['bully-pulpit-production-proxy', 'bully-pulpit-production-scheduler'] }
+    { name: 'bully-pulpit-production-companions', containers: ['bully-pulpit-production-proxy', 'bully-pulpit-production-scheduler'] },
+    { name: 'bully-pulpit-production-analytics', containers: ['bully-pulpit-production-analytics'], enabled_if: "#{DATA_DIR}/bully-pulpit/analytics" }
   ].freeze
 
   #-----------------------------------------------------------------------------------

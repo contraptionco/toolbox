@@ -91,6 +91,14 @@ class DashboardCollectorTest < Minitest::Test
     assert result[:applications].any? { |item| item[:name] == 'forgotten-app' && item[:status] == 'running' }
   end
 
+  def test_optional_companion_is_only_expected_after_runtime_provisioning
+    marker = File.join(@directory, 'analytics')
+    @config.const_set(:COMPOSE_APPLICATIONS, [{ name: 'analytics', containers: ['analytics'], enabled_if: marker }])
+    refute @collector.send(:configured_applications).any? { |item| item[:name] == 'analytics' }
+    Dir.mkdir(marker)
+    assert @collector.send(:configured_applications).any? { |item| item[:name] == 'analytics' }
+  end
+
   def test_container_metrics_use_only_safe_inspect_fields_and_flag_unconfigured_running
     result = @collector.snapshot
     postcard = result[:containers].find { |item| item[:name] == 'postcard' }

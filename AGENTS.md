@@ -193,3 +193,15 @@ Do not print secret values while collecting evidence.
    live server automatically, including restarting the tunnel.
 5. Report local validation, remote CI, and production verification separately.
    Do not describe an unmerged change as protection already installed on prod.
+
+## Bully Pulpit analytics companion
+
+The versioned app capability manifest gates the optional private DuckDB service.
+Keep its token separate from app/vault credentials, its network internal, and its
+persistent directory under the existing Bully Pulpit runtime. The release wrapper
+owns the expected service list so older images and rollbacks remain valid. Never
+open the live DuckDB file from a second writer, copy it while the service writes,
+or infer off-host backup coverage from the existing PostgreSQL backup. The app
+service creates checkpointed local snapshots; those same-host copies do not
+protect against host loss. Development tests use temporary paths and synthetic
+secrets only. No services or production runtime files are changed by tests.

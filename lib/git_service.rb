@@ -366,6 +366,29 @@ module Core
       raise 'Docker Compose readiness response is invalid'
     end
 
+    # A frozen release can add explicitly allowlisted companions without making
+    # older app images advertise executables they do not contain. The extension
+    # lives in the same Compose wrapper restored during an image rollback.
+    def self.required_compose_services(service_config)
+      baseline = service_config[:compose_readiness_services]
+      optional = service_config[:compose_optional_readiness_services]
+      return baseline unless baseline && optional
+
+      path = service_config.fetch(:compose_file)
+      return baseline unless File.file?(path)
+
+      manifest = JSON.parse(File.read(path))
+      required = manifest['x-toolbox-required-services']
+      return baseline if required.nil? # Legacy release wrappers predate analytics.
+      unless required.is_a?(Array) && required.uniq == required &&
+             (baseline - required).empty? && (required - baseline - optional).empty?
+        raise 'Invalid frozen Compose readiness requirements'
+      end
+      required
+    rescue JSON::ParserError
+      raise 'Invalid frozen Compose readiness manifest'
+    end
+
     def self.compose_services_ready?(local_path, compose_file, required_services)
       rows = compose_status_rows(local_path, compose_file)
       required_services.all? do |service|
@@ -611,7 +634,7 @@ module Core
       # missing/stopped supervised service, even when source/environment match.
       # Revalidate activation/copy guards and take the protected backup first.
       # Unhealthy running services require repair, never whole-stack restart loops.
-      readiness_services = service_config[:compose_readiness_services]
+      readiness_services = required_compose_services(service_config)
       if readiness_services && !deployment_needed
         deployment_needed = compose_recovery_required?(
           local_path, service_config[:compose_file], readiness_services
@@ -731,6 +754,7 @@ module Core
           else
             docker_compose_up(local_path, force_recreate: compose_changed)
           end
+          readiness_services = required_compose_services(service_config)
           if readiness_services && !compose_services_ready?(local_path, service_config[:compose_file], readiness_services)
             raise 'Required Docker Compose services failed readiness'
           end
