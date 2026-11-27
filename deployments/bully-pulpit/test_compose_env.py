@@ -108,6 +108,20 @@ class ComposeEnvironmentTest(unittest.TestCase):
             self.assertNotIn('ANALYTICS_TOKEN', config['services']['migrate']['environment'])
             self.assertNotIn('ANALYTICS_TOKEN', config['services']['scheduler']['environment'])
             self.assertEqual(str(root / 'analytics'), analytics['volumes'][0]['source'])
+            self.assertEqual('2147483648', analytics['environment']['ANALYTICS_MAXIMUM_DATABASE_BYTES'])
+            node = shutil.which('node')
+            if node:
+                health_script = analytics['healthcheck']['test'][-1]
+                for status, expected in [
+                    ({'ready': True, 'degraded': False, 'lastBackupErrorAt': None}, 0),
+                    ({'ready': True, 'degraded': True, 'lastBackupErrorAt': None}, 1),
+                    ({'ready': True, 'degraded': False, 'lastBackupErrorAt': 'fixture-time'}, 1),
+                    ({'ready': False, 'degraded': False, 'lastBackupErrorAt': None}, 1),
+                ]:
+                    # Execute the exact health command against synthetic HTTP data.
+                    fixture = 'globalThis.fetch=async()=>({ok:true,json:async()=>(' + json.dumps(status) + ')});'
+                    checked = subprocess.run([node, '-e', fixture + health_script], capture_output=True, timeout=15)
+                    self.assertEqual(expected, checked.returncode)
 
 
 if __name__ == '__main__':

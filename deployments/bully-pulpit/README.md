@@ -204,7 +204,9 @@ root, a 1 GiB memory cap, one CPU, bounded temporary space and logs, and no
 published ports. Only the app and analytics join its internal network; it cannot
 join PostgreSQL's network or use the app's provider credentials. The app does not
 need analytics to serve pages, but Toolbox requires a healthy analytics service
-before recording an analytics-capable release as healthy.
+before recording an analytics-capable release as healthy. Docker health checks
+inspect ingestion degradation and snapshot failures as well as HTTP readiness;
+a running unhealthy companion is reported without restarting the app.
 
 Preparation creates `analytics/` under the private runtime root with mode 0700,
 checks ownership and writeability, and refuses existing insecure paths instead of
@@ -216,7 +218,8 @@ source, deployment records, or the scheduler/migration service. Token rotation i
 a separate coordinated operation. No new vault value is required.
 
 The service checkpoints and takes an atomic, fsynced snapshot at startup and each
-24 hours, retaining seven snapshots under `analytics/backups/`; its authenticated
+24 hours, retaining at most seven snapshots no older than seven days under
+`analytics/backups/` (also pruned by hourly retention); its authenticated
 `/v1/backup` endpoint can request another consistent snapshot. Health reports the
 last snapshot outcome without event data. These are **same-host recovery copies**,
 not disaster recovery: the existing PostgreSQL/S3 job does not include DuckDB.
@@ -228,6 +231,13 @@ snapshot in an isolated temporary database with the matching image, then replace
 the database and restart that service. Never copy a live DuckDB file or mix a
 snapshot with an unrelated WAL, and never restore application Postgres to repair
 analytics.
+
+The reviewed capacity guards stop new ingestion when the database plus WAL reaches
+2 GiB or the data filesystem has less than 2 GiB free. They preserve queries and
+erasure and report degraded health. In Docker, this filesystem measurement is
+inside the Linux VM and does not establish physical APFS free space; Toolbox's
+host disk guards remain necessary. Change `ANALYTICS_MAXIMUM_DATABASE_BYTES` or
+`ANALYTICS_MINIMUM_FREE_BYTES` only with a reviewed capacity plan.
 
 Default event retention is 730 days. Backups retain up to seven further days;
 account erasure removes linked events and invalidates prior local snapshots in

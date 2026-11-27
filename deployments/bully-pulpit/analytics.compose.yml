@@ -27,6 +27,8 @@ services:
       ANALYTICS_DB_PATH: /data/analytics.duckdb
       ANALYTICS_BACKUP_DIR: /data/backups
       ANALYTICS_RETENTION_DAYS: '730'
+      ANALYTICS_MINIMUM_FREE_BYTES: '2147483648'
+      ANALYTICS_MAXIMUM_DATABASE_BYTES: '2147483648'
     volumes:
       - ${BULLY_RUNTIME_DIR:?private runtime required}/analytics:/data
     networks: [analytics]
@@ -39,7 +41,7 @@ services:
     cpus: 1
     stop_grace_period: 45s
     healthcheck:
-      test: [CMD, node, -e, 'fetch("http://127.0.0.1:4100/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:4100/health").then(async r=>{const h=await r.json();process.exit(r.ok&&h.ready===true&&h.degraded===false&&!h.lastBackupErrorAt?0:1)}).catch(()=>process.exit(1))']
       interval: 30s
       timeout: 5s
       retries: 3
