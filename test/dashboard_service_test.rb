@@ -164,12 +164,28 @@ class DashboardServiceTest < Minitest::Test
     refute_includes File.read(plist_path), 'smtp_password'
   end
 
+  def test_default_credential_reader_uses_the_structured_field_value
+    calls = []
+    reader = ->(item, field) { calls << [item, field]; @credentials }
+    service = Core::DashboardService.new(repo_dir: @repo, home_dir: @home, runner: @runner,
+      uid: 501, ruby: '/fixture/ruby/bin/ruby', sleeper: ->(seconds) { @sleeps << seconds },
+      health_reader: -> { @health.length > 1 ? @health.shift : @health.first })
+    Core::OnePassword.stub(:get_item, ->(*) { flunk 'Dashboard must not read CSV field output' }) do
+      Core::OnePassword.stub(:get_json_field, reader) { assert service.ensure_running }
+    end
+    assert_equal [[Config::DASHBOARD.fetch(:auth_item), Config::DASHBOARD.fetch(:auth_field)]], calls
+    path = File.join(@repo, '.runtime', 'dashboard', 'auth-config.json')
+    assert_equal JSON.parse(@credentials), JSON.parse(File.read(path))
+  end
+
   def test_missing_or_invalid_credentials_preserve_existing_service
     [IOError.new('private-provider-details'), '{}', 'private invalid json'].each do |value|
       @credentials = value
       @health = [nil]
       error = assert_raises(RuntimeError) { @service.ensure_running }
       assert_equal 'Dashboard authentication configuration is unavailable; running service preserved', error.message
+      refute_includes error.full_message, 'private'
+      assert_nil error.cause
       assert_empty launch_commands
       refute @runner.calls.any? { |arguments, _| arguments.include?('install') }
     end

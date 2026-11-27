@@ -26,7 +26,7 @@ module Core
                    uid: Process.uid, ruby: RbConfig.ruby, credential_reader: nil)
       @repo, @home, @runner, @sleeper, @uid, @ruby = repo_dir, home_dir, runner, sleeper, uid, ruby
       @runtime = File.join(@repo, '.runtime', 'dashboard')
-      @credential_reader = credential_reader || -> { Core::OnePassword.get_item(Config::DASHBOARD.fetch(:auth_item), Config::DASHBOARD.fetch(:auth_field)) }
+      @credential_reader = credential_reader || -> { Core::OnePassword.get_json_field(Config::DASHBOARD.fetch(:auth_item), Config::DASHBOARD.fetch(:auth_field)) }
       @health_reader = health_reader || method(:health)
     end
 
@@ -95,7 +95,7 @@ module Core
       atomic_write(File.join(@runtime, 'auth-config.json'), JSON.generate(settings))
     rescue StandardError
       # Credential-provider diagnostics may include secret fields or vault output.
-      raise 'Dashboard authentication configuration is unavailable; running service preserved'
+      raise 'Dashboard authentication configuration is unavailable; running service preserved', cause: nil
     end
 
     def bundle_environment

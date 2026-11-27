@@ -62,6 +62,77 @@ class OnePasswordTest < Minitest::Test
     assert_cleanup_call calls.fetch(1), container_name, secret
   end
 
+  def test_structured_field_preserves_json_quotes_commas_and_newlines
+    value = "{\n  \"smtp_user\": \"fixture,user\", \"smtp_password\": \"fixture\\\"quote\"\n}"
+    output = JSON.generate(id: 'fixture-id', label: 'CONFIG', type: 'CONCEALED', value: value)
+    calls, runner = recording_docker_runner([output, '', FakeStatus.new(true)])
+    with_environment('TOOLBOX_OP_BACKEND' => 'docker', 'OP_SERVICE_ACCOUNT_TOKEN' => 'service-account-secret') do
+      Core::CommandRunner.stub(:capture3, runner) do
+        assert_equal value, Core::OnePassword.get_json_field('Toolbox Dashboard', 'CONFIG')
+      end
+    end
+    command, options = calls.fetch(0)
+    container_name = command.fetch(4)
+    assert_equal docker_command(container_name, 'item', 'get', 'Toolbox Dashboard',
+      '--vault', Config::OP_VAULT, '--fields', 'CONFIG', '--reveal', '--format', 'json'), command
+    assert_equal '1Password structured field lookup', options[:label]
+    refute_includes command.join(' '), value
+    assert_cleanup_call calls.fetch(1), container_name, 'service-account-secret'
+  end
+
+  def test_structured_field_uses_separate_cache_from_legacy_csv_output
+    value = JSON.generate(secret: 'fixture,with"quotes')
+    csv = '"' + value.gsub('"', '""') + '"'
+    legacy_calls, legacy = recording_docker_runner([csv, '', FakeStatus.new(true)])
+    structured_calls, structured = recording_docker_runner([JSON.generate(label: 'CONFIG', value: value), '', FakeStatus.new(true)])
+    with_service_account do
+      Core::CommandRunner.stub(:capture3, legacy) do
+        assert_equal csv, Core::OnePassword.get_item('Toolbox Dashboard', 'CONFIG')
+      end
+      Core::CommandRunner.stub(:capture3, structured) do
+        assert_equal value, Core::OnePassword.get_json_field('Toolbox Dashboard', 'CONFIG')
+      end
+      Core::CommandRunner.stub(:capture3, ->(*) { flunk 'Fresh caches must not call the provider' }) do
+        assert_equal csv, Core::OnePassword.get_item('Toolbox Dashboard', 'CONFIG')
+        assert_equal value, Core::OnePassword.get_json_field('Toolbox Dashboard', 'CONFIG')
+      end
+    end
+    assert_equal 2, legacy_calls.length
+    assert_equal 2, structured_calls.length
+    assert_equal 2, Dir[File.join(@cache_root, '*.json')].length
+  end
+
+  def test_structured_field_rejects_invalid_or_ambiguous_provider_output_without_caching_or_disclosure
+    outputs = ['private invalid json', JSON.generate([{ label: 'CONFIG', value: 'private-value' }]),
+      JSON.generate(label: 'OTHER', value: 'private-value'), JSON.generate(label: 'CONFIG'),
+      JSON.generate(label: 'CONFIG', value: { secret: 'private-value' }),
+      JSON.generate(label: 'CONFIG', value: 'private-value' * 16_384),
+      '{"label":"CONFIG","value":"private-value","extra":[[[[[]]]]]}']
+    with_service_account do
+      outputs.each do |output|
+        _calls, runner = recording_docker_runner([output, '', FakeStatus.new(true)])
+        error = assert_raises(RuntimeError) do
+          Core::CommandRunner.stub(:capture3, runner) { Core::OnePassword.get_json_field('Toolbox Dashboard', 'CONFIG') }
+        end
+        assert_equal 'Invalid 1Password field response', error.message
+        refute_includes error.full_message, 'private'
+        assert_nil error.cause
+      end
+      assert_empty Dir[File.join(@cache_root, '*.json')]
+    end
+  end
+
+  def test_structured_field_sanitizes_provider_failure
+    _calls, runner = recording_docker_runner(['private-output', 'private provider diagnostic', FakeStatus.new(false)])
+    with_service_account do
+      error = assert_raises(RuntimeError) do
+        Core::CommandRunner.stub(:capture3, runner) { Core::OnePassword.get_json_field('Toolbox Dashboard', 'CONFIG') }
+      end
+      assert_equal '1Password structured field lookup failed', error.message
+      assert_empty Dir[File.join(@cache_root, '*.json')]
+    end
+  end
+
   def test_docker_timeout_still_force_removes_the_exact_container
     secret = 'service-account-secret'
     calls = []
