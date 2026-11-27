@@ -50,6 +50,31 @@ module Core
       end
     end
 
+    # Default --fields output is CSV, so quotes and commas in JSON credentials
+    # are escaped. Read the structured field value without changing legacy reads
+    # or reusing their cached transport representation.
+    def self.get_json_field(item_name, field_name)
+      cached_success(['json_field', item_name, field_name]) do
+        stdout, _stderr, status = run_op(
+          'item', 'get', item_name,
+          '--vault', Config::OP_VAULT,
+          '--fields', field_name,
+          '--reveal', '--format', 'json',
+          label: '1Password structured field lookup'
+        )
+        raise '1Password structured field lookup failed' unless status.success?
+        raise 'Invalid 1Password field response' unless stdout.is_a?(String) && stdout.bytesize <= 131_072
+
+        field = JSON.parse(stdout, max_nesting: 4)
+        unless field.is_a?(Hash) && field['label'] == field_name && field['value'].is_a?(String)
+          raise 'Invalid 1Password field response'
+        end
+        field['value']
+      end
+    rescue JSON::ParserError, JSON::NestingError
+      raise 'Invalid 1Password field response', cause: nil
+    end
+
     # Heartbeats and Docker helpers are separate processes. Only service-account
     # results are cached; interactive accounts keep the CLI's normal behavior.
     def self.cached_success(lookup)
