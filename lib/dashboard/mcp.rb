@@ -6,7 +6,7 @@ module Dashboard
   # Stateless Streamable HTTP: finite JSON responses, bearer authentication only.
   # Collector methods own the fixed command allowlist and output redaction.
   class MCP
-    VERSIONS = %w[2025-03-26 2025-06-18 2025-11-25].freeze
+    VERSIONS = %w[2025-06-18 2025-11-25].freeze
     MAX_BODY_BYTES = 65_536
     TOOL_ANNOTATIONS = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }.freeze
     TOOLS = [

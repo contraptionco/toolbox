@@ -38,8 +38,8 @@ the secret and SMTP placeholders are replaced:
   "secret": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS",
   "smtp_host": "email-smtp.us-east-2.amazonaws.com",
   "smtp_port": 587,
-  "smtp_user": "REPLACE_WITH_DEDICATED_SES_SMTP_USERNAME",
-  "smtp_password": "REPLACE_WITH_DEDICATED_SES_SMTP_PASSWORD",
+  "smtp_user": "REPLACE_WITH_SES_SMTP_USERNAME",
+  "smtp_password": "REPLACE_WITH_SES_SMTP_PASSWORD",
   "smtp_from": "Toolbox <toolbox@ilic.nyc>"
 }
 ```
@@ -50,9 +50,15 @@ arguments or a development checkout. Changing the secret invalidates pending
 email codes and existing page CSRF tokens; it does not revoke existing sessions
 or passkeys. Revoke sessions separately when responding to credential exposure.
 
-Use dedicated SES SMTP credentials in the same region as the configured SMTP
-endpoint. Verify the `ilic.nyc` sending identity in that region and permit the
-`toolbox@ilic.nyc` sender. If the SES account is in its sandbox, verify the owner
+Initial Toolbox provisioning reuses Manual's existing regional SES SMTP
+credentials, stored in the separate Toolbox item. Rotating or deleting that SES
+credential affects both applications: update and verify both configurations
+before retiring the old credential. A dedicated Toolbox SMTP credential would
+remove this coupling and is recommended for a future rotation.
+
+Keep the SMTP credential in the same region as the configured endpoint. Verify
+the `ilic.nyc` sending identity in that region and permit the `toolbox@ilic.nyc`
+sender. If the SES account is in its sandbox, verify the owner
 recipient too. SMTP credentials are regional, and the SMTP password differs from
 an AWS secret access key. The dashboard needs SMTP delivery only; it does not
 need Manual's S3 access or an AWS administration credential.
@@ -139,9 +145,10 @@ or more access is needed. Under **Connected apps**, disconnecting a grant revoke
 its access and refresh tokens immediately; ordinary website sign-out does not
 revoke connected apps.
 
-The server uses stateless Streamable HTTP with JSON responses. Local fixture and
-protocol tests exercise discovery, registration, PKCE, token refresh, revocation
-and tools. A completed real Claude consent and tool call remains a separate
+The server uses stateless Streamable HTTP with JSON responses for MCP revisions
+`2025-06-18` and `2025-11-25`. Local fixture and protocol tests exercise discovery,
+registration, PKCE, token refresh, revocation and tools. A completed real Claude
+consent and tool call remains a separate
 production verification step.
 
 ## Production cutover

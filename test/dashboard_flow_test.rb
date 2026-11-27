@@ -4,6 +4,8 @@ require 'fileutils'
 require 'net/http'
 require 'webrick'
 require 'digest'
+require 'socket'
+require 'timeout'
 require 'base64'
 require_relative '../lib/dashboard/app'
 require_relative '../lib/dashboard/auth'
@@ -184,6 +186,26 @@ class DashboardFlowTest < Minitest::Test
     assert_status 401, request(:get, '/api/status')
     assert_status 401, request(:get, '/api/status', browser: false, headers: { 'Cookie' => stale_cookie })
     assert_equal false, json(request(:get, '/auth/session')).fetch('authenticated')
+  end
+
+  def test_non_post_bodies_are_rejected_before_webrick_drains_them
+    socket = nil
+    [['GET', '/healthz'], ['GET', '/'], ['OPTIONS', '/mcp']].each do |method, path|
+      ['Content-Length: 1000000', 'Transfer-Encoding: chunked'].each do |body_header|
+        socket = TCPSocket.new('127.0.0.1', @port)
+        socket.write("#{method} #{path} HTTP/1.1\r\nHost: #{URI(ORIGIN).host}\r\n#{body_header}\r\nConnection: keep-alive\r\n\r\n")
+        # No body bytes or terminal chunk follow. The guard must close promptly,
+        # before WEBrick's five-second timeout or any successful route response.
+        response = Timeout.timeout(2) { socket.read }
+        assert_match(/\AHTTP\/1\.1 400 /, response)
+        assert_match(/\r\nConnection: close\r\n/i, response)
+        assert_includes response, 'Request bodies are only accepted for POST requests'
+        socket.close
+      end
+    end
+    assert_status 200, request(:get, '/healthz', headers: { 'Content-Length' => '0' })
+  ensure
+    socket&.close unless socket&.closed?
   end
 
   private

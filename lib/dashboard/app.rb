@@ -41,6 +41,12 @@ module Dashboard
 
     def call(request, response)
       security_headers(response)
+      # WEBrick drains unread bodies before sending even successful responses.
+      # None of our non-POST routes accept bodies, so reject them before routing.
+      length = request['content-length']
+      if request.request_method != 'POST' && (request['transfer-encoding'] || (length && !length.match?(/\A0+\z/)))
+        return json(response, 400, error: 'Request bodies are only accepted for POST requests')
+      end
       if request.path == '/healthz' && %w[GET HEAD].include?(request.request_method)
         return json(response, 200, ok: true, revision: @revision)
       end

@@ -48,8 +48,6 @@ module Dashboard
         <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><style>
         @font-face{font-family:Sohne;src:url('https://fonts.philipithomas.com/klim/soehne-buch.woff2') format('woff2');font-weight:400;font-display:swap}
         @font-face{font-family:'Sohne Mono';src:url('https://fonts.philipithomas.com/klim/soehne-mono-buch.woff2') format('woff2');font-weight:400;font-display:swap}
-        @font-face{font-family:Sohne;src:url('https://fonts.philipithomas.com/klim/soehne-buch.woff2') format('woff2');font-weight:400}
-        @font-face{font-family:'Sohne Mono';src:url('https://fonts.philipithomas.com/klim/soehne-mono-buch.woff2') format('woff2');font-weight:400}
         @media(max-width:600px){.outer{padding:24px 12px!important}.content{padding:28px 24px!important}}
         @media(prefers-color-scheme:dark){body,.outer{background:#121110!important}.card{background:#1C1A17!important}.card p{color:#D7D3CC!important}.code{color:#ECE9E4!important}.muted{color:#A8A49D!important}}
         </style></head><body style="margin:0;background:#F5F3F0;font-family:Sohne,Arial,Helvetica,sans-serif"><div style="display:none;max-height:0;overflow:hidden">Your sign-in code expires in 10 minutes.</div>

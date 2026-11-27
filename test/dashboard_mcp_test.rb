@@ -90,6 +90,26 @@ class DashboardMCPTest < Minitest::Test
     assert_empty @collector.calls
   end
 
+  def test_version_negotiation_only_accepts_implemented_protocol_revisions
+    %w[2025-06-18 2025-11-25].each do |version|
+      response = call('initialize', { protocolVersion: version, capabilities: {}, clientInfo: { name: 'fixture', version: '1' } },
+        headers: { 'mcp-protocol-version' => nil })
+      assert_equal 200, response.status
+      assert_equal version, parsed(response).dig('result', 'protocolVersion')
+      assert_equal version, response['MCP-Protocol-Version']
+      assert_equal 200, call('ping', headers: { 'mcp-protocol-version' => version }).status
+    end
+    # A legacy offer can negotiate a supported revision, but subsequent requests
+    # cannot claim the older batching-capable revision that we do not implement.
+    response = call('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'fixture', version: '1' } },
+      headers: { 'mcp-protocol-version' => nil })
+    assert_equal '2025-11-25', parsed(response).dig('result', 'protocolVersion')
+    %w[2025-03-26 2026-07-28].each do |version|
+      assert_equal 400, call('tools/call', { name: 'toolbox_status' }, headers: { 'mcp-protocol-version' => version }).status
+    end
+    assert_empty @collector.calls
+  end
+
   def test_notifications_do_not_trigger_collection
     response = call('notifications/initialized', {}, id: :absent)
     assert_equal 202, response.status
