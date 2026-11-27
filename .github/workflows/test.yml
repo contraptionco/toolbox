@@ -19,3 +19,5 @@ jobs:
         run: bundle exec ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
       - name: Check heartbeat syntax
         run: zsh -n heartbeat.sh
+      - name: Check Bully Pulpit release and scheduler guards
+        run: python3 -m unittest discover -s deployments/bully-pulpit -p 'test_*.py'

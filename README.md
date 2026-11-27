@@ -327,6 +327,16 @@ be removed from the `manual` 1Password item's multiline `ENV` field. Manual no
 longer reads them. Toolbox does not modify the source item or macOS Accessibility
 settings; the existing Ruby interpreter may still be used by other applications.
 
+### Bully Pulpit migration
+
+The staged production integration follows the ordinary heartbeat and uses a
+separate app deployment checkout plus two databases in the existing PostgreSQL
+container. It remains disabled until the final verified cloud copy is explicitly
+enabled; primary scheduled work has a separate activation gate. See
+[the deployment runbook](deployments/bully-pulpit/README.md) for credentials,
+copy verification, rollout, durable scheduling and rollback. Keep the old pilot
+and its database intact during migration.
+
 ### PostgreSQL backups, including Manual
 
 Manual's production `DATABASE_URL` points to the `manual` database in Toolbox's

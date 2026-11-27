@@ -5,8 +5,21 @@ Cloudflare Tunnel, backups, and other host services. A scheduled macOS LaunchAge
 invokes the heartbeat from `/Users/philip/code/toolbox` every minute.
 
 Postcard and its PostgreSQL database are the critical application services on this
-Mac. Bully Pulpit is also critical, but runs on Vercel; preserve its local
-checkouts and development work without treating them as Mac-hosted production.
+Mac. Bully Pulpit is also critical. Check its runtime markers and current DNS
+before assuming the prepared local deployment is serving production. Preserve
+its development checkouts.
+The production Bully Pulpit migration is configured in
+`deployments/bully-pulpit/`. The normal heartbeat uses its dedicated deployment
+checkout `/Users/philip/code/bully-pulpit-production`, runtime directory
+`/Users/philip/data/bully-pulpit`, and `Bully Pulpit Production` vault item. It
+uses app-owned databases inside the existing managed `postgres` container.
+Merging configuration alone does not enable it: the final verified cloud-copy
+record, explicit enable marker, and separate primary activation marker gate
+rollout. Preserve the old pilot runtime and `bully-pulpit-postgres` until explicit
+retirement. The production app/proxy/scheduler use distinct container names.
+Keep the public normalized Workflow deny, private runtime secrets, exact release
+image records, and durable cron attempt ledger. Follow the deployment README for
+cutover and rollback; never restore an old database to undo an image deployment.
 
 The two font repositories have different hosting: `philipithomas/fonts` serves
 `fonts.philipithomas.com` on Vercel; its old `philipithomas-fonts` Mac deployment

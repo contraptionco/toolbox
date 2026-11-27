@@ -92,6 +92,28 @@ module Config
   # These can be code that gets built and deployed, or code that runs in containers
   GIT_SERVICES = [
     {
+      name: 'bully-pulpit-production',
+      repo_url: 'git@github.com:philipithomas/bully-pulpit.git',
+      local_path: "#{CODE_DIR}/bully-pulpit-production",
+      branch: 'main',
+      # Merging configuration alone cannot start a second production writer.
+      enabled_if: "#{DATA_DIR}/bully-pulpit/enabled.json",
+      env_config: { type: '1password', item: 'Bully Pulpit Production', field: 'ENV' },
+      env_file_path: "#{DATA_DIR}/bully-pulpit/secrets/app.env",
+      build_cmd: "python3 #{CODE_DIR}/toolbox/deployments/bully-pulpit/deploy.py prepare",
+      release_environment: true,
+      release_inputs: %w[compose.yml nginx.conf scheduler.py deploy.py secrets.py].map { |file| "#{CODE_DIR}/toolbox/deployments/bully-pulpit/#{file}" },
+      use_compose: true,
+      compose_file: "#{DATA_DIR}/bully-pulpit/compose.json",
+      compose_readiness_services: %w[app proxy scheduler],
+      after_deploy_command: "python3 #{CODE_DIR}/toolbox/deployments/bully-pulpit/deploy.py record",
+      dashboard: {
+        container_name: 'bully-pulpit-production',
+        one_shot_containers: ['bully-pulpit-production-migrate']
+      },
+      auto_update: true
+    },
+    {
       name: 'postcard',                                          # Service name
       repo_url: 'git@github.com:contraptionco/postcard.git',     # CHANGE THIS to your repository
       local_path: "#{CODE_DIR}/postcard",                        # Where to clone the repo
@@ -270,6 +292,14 @@ module Config
   # Additional native services. Netdata is retired; host metrics come directly
   # from the Toolbox dashboard, which has its own LaunchAgent lifecycle.
   SYSTEM_SERVICES = []
+
+  # Explicitly released Compose applications, not heartbeat deployments. The
+  # dashboard observes these containers; it never starts, rebuilds or updates
+  # them. The parallel Bully Pulpit release follows a reviewed branch SHA.
+  COMPOSE_APPLICATIONS = [
+    { name: 'bully-pulpit-pilot', containers: ['bully-pulpit', 'bully-pulpit-postgres', 'bully-pulpit-proxy'] },
+    { name: 'bully-pulpit-production-companions', containers: ['bully-pulpit-production-proxy', 'bully-pulpit-production-scheduler'] }
+  ].freeze
 
   #-----------------------------------------------------------------------------------
   # CLOUDFLARE TUNNEL CONFIGURATION - REQUIRED

@@ -80,6 +80,17 @@ class DashboardCollectorTest < Minitest::Test
     refute_includes JSON.generate(result), 'never-run'
   end
 
+  def test_explicit_compose_containers_are_observed_without_service_commands
+    @config.const_set(:COMPOSE_APPLICATIONS, [{ name: 'external-project', containers: ['forgotten-app'] }])
+    collector = Dashboard::Collector.new(repo_dir: @directory, config: @config, runner: @runner,
+                                         clock: -> { @now }, hostname: 'Mac mini', platform: 'arm64-darwin',
+                                         docker_disk_path: File.join(@directory, 'Docker.raw'))
+    result = collector.snapshot
+    assert result[:containers].find { |item| item[:name] == 'forgotten-app' }[:configured]
+    refute result[:warnings].any? { |line| line.include?('forgotten-app') }
+    assert result[:applications].any? { |item| item[:name] == 'forgotten-app' && item[:status] == 'running' }
+  end
+
   def test_container_metrics_use_only_safe_inspect_fields_and_flag_unconfigured_running
     result = @collector.snapshot
     postcard = result[:containers].find { |item| item[:name] == 'postcard' }
