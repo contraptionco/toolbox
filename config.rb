@@ -22,15 +22,15 @@ module Config
   # Ignored local state for deployment markers and runtime environment files.
   RUNTIME_DIR = File.expand_path('.runtime', __dir__)
 
-  # Native, read-only dashboard: macOS metrics must come from the host, not the
-  # Docker VM. Access is enforced at Cloudflare and again by JWT at the origin.
-  # These are public Access application identifiers, not credentials.
+  # Native read-only host data, with first-party owner authentication and OAuth.
+  # Credentials are provisioned from 1Password into a private runtime file.
   DASHBOARD = {
     enabled: true,
     hostname: 'toolbox.contraption.co',
     port: 4178,
-    issuer: 'https://contraptionco.cloudflareaccess.com',
-    audience: '1f75d7dd8a314566d75b772f650152a05639eb9c3fb187166f653526c0d14753'
+    auth_item: 'Toolbox Dashboard',
+    auth_field: 'CONFIG',
+    auth_data_dir: "#{DATA_DIR}/toolbox-dashboard"
   }.freeze
 
   #-----------------------------------------------------------------------------------

@@ -72,9 +72,9 @@ LaunchAgent state, which can contain secrets.
 - Search the MCP API schema before requests, request only needed permissions,
   and treat authentication as access to tools, not blanket permission to change
   production. Back up remote configuration privately before authorized edits.
-- `toolbox.contraption.co` uses the existing Toolbox UI Access application and
-  the same “Philip secure” allow policy as the retired Junk Drawer. Preserve that
-  policy; never add a bypass or service-token rule just to make testing easier.
+- `toolbox.contraption.co` uses first-party owner authentication after the verified
+  auth cutover. Preserve the shared “Philip secure” Access policy and all unrelated
+  Access applications. Do not add bypass or service-token rules for testing.
 
 ## Read-only dashboard
 
@@ -85,15 +85,20 @@ LaunchAgent state, which can contain secrets.
   its LaunchAgent running, and restarts only this service when the revision
   changes. Dashboard failures are reported without skipping other app checks.
   Its LaunchAgent receives an explicit environment without deployment secrets.
-- Cloudflare Access is the only authentication mechanism. The connector and
-  Ruby origin both validate the application JWT. The origin checks the signature,
-  algorithm, issuer, audience and expiry; it never trusts an email header alone.
-  `/healthz` exposes only readiness and revision. All UI/API routes require Access.
-- Keep the HTTP API GET/HEAD-only. Never add shell commands, Docker mutations,
+  Only its private mail configuration is read from disk by the web process.
+- Email OTP and passkeys allow only `philip@ilic.nyc`. The dashboard reads its
+  private config from `.runtime/dashboard/auth-config.json`, provisioned from the
+  `Toolbox Dashboard` 1Password item. Persistent auth state lives in
+  `~/data/toolbox-dashboard/auth.sqlite3`; preserve it through releases/rollbacks.
+  Never give the web service the vault token or other applications' credentials.
+  `/healthz` exposes only readiness and revision. All host data requires a session
+  or a scoped, owner-approved OAuth bearer token; Cloudflare headers are ignored.
+- Keep host-data HTTP APIs GET/HEAD-only. Authentication, OAuth and read-only MCP
+  use bounded POST routes. Never add shell commands, Docker mutations,
   arbitrary paths, environment dumps, full container inspect output, or credential
   helpers to the web app. Collectors use fixed, bounded read-only commands.
-- Logs are bounded and redacted, but redaction is best effort. Keep Access in
-  front of them. Never cache metrics, logs or auth responses offline, or write
+- Logs are bounded and redacted, but redaction is best effort. Require authenticated
+  browser access or explicit `toolbox:logs` OAuth consent for them. Never cache metrics, logs or auth responses offline, or write
   raw request headers/tokens into web logs. Transient credential-helper containers
   must not expose their logs or appear as unconfigured application alerts.
 - Show immediately free and reclaimable disk space separately. Docker.raw's
@@ -105,6 +110,7 @@ LaunchAgent state, which can contain secrets.
   metrics are added later; do not add raw-log retention by default.
 - For UI work, run `bundle install`, then `ruby web/server.rb --demo` in the
   development clone. This binds to **127.0.0.1:4179** and uses synthetic data only.
+  Demo email codes go to an ephemeral private local file printed at startup.
   There is no auth-bypass mode that reads the production host. Stop demo servers
   after testing. Match Bully Pulpit's typography, warm colors and square controls.
   Reuse the README's `assets/toolbox.svg` logo rather than inventing a wordmark.

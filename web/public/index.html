@@ -16,6 +16,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.philipithomas.com" crossorigin>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/auth.css">
   <script src="/app.js" defer></script>
 </head>
 <body class="is-loading">
@@ -54,7 +55,7 @@
 
     <section class="operations" aria-label="Deployment and host information" data-loading-region aria-busy="true">
       <article class="deployment-panel"><div class="panel-top"><p class="eyebrow">Toolbox deployment</p><span id="deploy-badge" class="badge neutral">Checking</span></div><h2 id="deploy-title">Reading the heartbeat</h2><p id="deploy-message" class="muted">The host checks for deployment updates every minute.</p><dl class="deploy-facts"><div><dt>Checked</dt><dd id="deploy-checked">—</dd></div><div><dt>Last success</dt><dd id="deploy-success">—</dd></div><div><dt>Revision</dt><dd><span id="deploy-branch">—</span> <code id="deploy-commit">—</code></dd></div></dl></article>
-      <article class="host-panel"><p class="eyebrow">At home, at work</p><div class="host-heading"><svg viewBox="0 0 80 64" fill="none" aria-hidden="true"><rect x="6" y="12" width="68" height="42" rx="8" stroke="currentColor" stroke-width="1.5"/><path d="M6 40h68" stroke="currentColor" stroke-width="1.5"/><circle cx="63" cy="47" r="1.5" fill="currentColor"/><path d="M19 54v3M61 54v3" stroke="currentColor" stroke-width="1.5"/><path d="M34 25h12M40 19v12" stroke="currentColor" stroke-width="1.5"/></svg><div><h2 id="host-name">Mac mini</h2><p id="host-os" class="muted">Production host</p></div></div><dl class="host-facts"><div><dt>Uptime</dt><dd id="host-uptime">—</dd></div><div><dt>Access</dt><dd>Cloudflare Access</dd></div><div><dt>Control</dt><dd>Observation only</dd></div></dl><p class="host-storage" id="docker-storage">Docker storage is measured by allocated disk space.</p></article>
+      <article class="host-panel"><p class="eyebrow">At home, at work</p><div class="host-heading"><svg viewBox="0 0 80 64" fill="none" aria-hidden="true"><rect x="6" y="12" width="68" height="42" rx="8" stroke="currentColor" stroke-width="1.5"/><path d="M6 40h68" stroke="currentColor" stroke-width="1.5"/><circle cx="63" cy="47" r="1.5" fill="currentColor"/><path d="M19 54v3M61 54v3" stroke="currentColor" stroke-width="1.5"/><path d="M34 25h12M40 19v12" stroke="currentColor" stroke-width="1.5"/></svg><div><h2 id="host-name">Mac mini</h2><p id="host-os" class="muted">Production host</p></div></div><dl class="host-facts"><div><dt>Uptime</dt><dd id="host-uptime">—</dd></div><div><dt>Sign-in</dt><dd>Email &amp; passkeys</dd></div><div><dt>Control</dt><dd>Observation only</dd></div></dl><p class="host-storage" id="docker-storage">Docker storage is measured by allocated disk space.</p></article>
     </section>
 
     <section class="applications-section" id="applications" aria-labelledby="applications-title">
@@ -73,7 +74,7 @@
       <p class="footnote">Logs are redacted on the host and never saved for offline use. Pause to inspect a moment in time.</p>
     </section>
 
-    <footer class="page-footer"><div><a class="footer-wordmark" href="#overview"><img src="/icons/logo.svg" width="193" height="31" alt="Toolbox"></a><p>A view into the machine. Nothing to accidentally switch off.</p></div><details class="install-help"><summary>Keep it on your iPhone <span aria-hidden="true">↗</span></summary><p>Open this page in Safari, tap Share, then <strong>Add to Home Screen</strong>. Cloudflare may ask you to sign in again in the installed app. Live readings need a connection.</p><button id="install-app" class="text-button" type="button" hidden>Install Toolbox ↗</button></details><a class="sign-out" href="/cdn-cgi/access/logout" id="sign-out">Sign out ↗</a></footer>
+    <footer class="page-footer"><div><a class="footer-wordmark" href="#overview"><img src="/icons/logo.svg" width="193" height="31" alt="Toolbox"></a><p>A view into the machine. Nothing to accidentally switch off.</p></div><details class="install-help"><summary>Keep it on your iPhone <span aria-hidden="true">↗</span></summary><p>Open this page in Safari, tap Share, then <strong>Add to Home Screen</strong>. Sign in with an email code or a saved passkey in the installed app. Live readings need a connection.</p><button id="install-app" class="text-button" type="button" hidden>Install Toolbox ↗</button></details><div class="account-links"><a class="sign-out" href="/security">Sign-in &amp; connections</a><a class="sign-out" href="/login" id="sign-out">Sign out ↗</a></div></footer>
   </main>
 </body>
 </html>

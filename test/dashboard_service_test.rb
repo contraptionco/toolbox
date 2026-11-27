@@ -49,6 +49,7 @@ class DashboardServiceTest < Minitest::Test
     ENV['TOOLBOX_PRODUCTION_REPO_DIR'] = @repo
     ENV.delete('TOOLBOX_REPO_DIR')
     ENV['OP_SERVICE_ACCOUNT_TOKEN'] = 'fixture-secret-that-must-not-enter-plist'
+    @credentials = JSON.generate(secret: 'a' * 64, smtp_host: 'email-smtp.us-east-2.amazonaws.com', smtp_port: 587, smtp_user: 'fixture-user', smtp_password: 'fixture-secret', smtp_from: 'Toolbox <toolbox@ilic.nyc>')
     @runner = Runner.new
     @health = [nil, REVISION]
     @sleeps = []
@@ -154,12 +155,33 @@ class DashboardServiceTest < Minitest::Test
     assert_equal 2, launch_commands.length
   end
 
+  def test_auth_configuration_is_private_and_kept_out_of_launchagent
+    assert @service.ensure_running
+    path = File.join(@repo, '.runtime', 'dashboard', 'auth-config.json')
+    assert_equal 0o600, File.stat(path).mode & 0o777
+    assert_equal JSON.parse(@credentials), JSON.parse(File.read(path))
+    refute_includes File.read(plist_path), 'fixture-secret'
+    refute_includes File.read(plist_path), 'smtp_password'
+  end
+
+  def test_missing_or_invalid_credentials_preserve_existing_service
+    [IOError.new('private-provider-details'), '{}', 'private invalid json'].each do |value|
+      @credentials = value
+      @health = [nil]
+      error = assert_raises(RuntimeError) { @service.ensure_running }
+      assert_equal 'Dashboard authentication configuration is unavailable; running service preserved', error.message
+      assert_empty launch_commands
+      refute @runner.calls.any? { |arguments, _| arguments.include?('install') }
+    end
+  end
+
   private
 
   def service(repo_dir: @repo)
     Core::DashboardService.new(repo_dir: repo_dir, home_dir: @home, runner: @runner,
       uid: 501, ruby: '/fixture/ruby/bin/ruby', sleeper: ->(seconds) { @sleeps << seconds },
-      health_reader: -> { @health.length > 1 ? @health.shift : @health.first })
+      health_reader: -> { @health.length > 1 ? @health.shift : @health.first },
+      credential_reader: -> { @credentials.is_a?(Exception) ? raise(@credentials) : @credentials })
   end
 
   def plist_path

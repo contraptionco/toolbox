@@ -17,6 +17,14 @@ jobs:
           bundler-cache: true
       - name: Run unit tests
         run: bundle exec ruby -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check browser scripts
+        run: |
+          node --check web/public/app.js
+          node --check web/public/auth.js
+          node --check web/public/sw.js
       - name: Check heartbeat syntax
         run: zsh -n heartbeat.sh
       - name: Check Bully Pulpit release and scheduler guards

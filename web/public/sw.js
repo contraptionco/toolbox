@@ -1,7 +1,7 @@
 'use strict';
 // Only generic, static assets are stored. Navigations, host metrics, logs and
-// Cloudflare authentication responses are NEVER cached or replayed offline.
-const CACHE = 'toolbox-shell-v2';
+// authentication and OAuth responses are NEVER cached or replayed offline.
+const CACHE = 'toolbox-shell-v3';
 const ASSETS = ['/offline.html', '/style.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/logo.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -9,7 +9,7 @@ self.addEventListener('install', (event) => {
     for (const asset of ASSETS) {
       const response = await fetch(asset, { cache: 'reload', redirect: 'error' });
       if (!response.ok || response.redirected) throw new Error('Static asset unavailable');
-      // An expired Access session must never turn a login page into an asset.
+      // An expired session must never turn a login page into an asset.
       const contentType = response.headers.get('content-type') || '';
       if (asset !== '/offline.html' && contentType.includes('text/html')) throw new Error('Authentication required');
       await cache.put(asset, response);
@@ -26,7 +26,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/cdn-cgi/') || url.pathname === '/healthz') return;
+  if (['/api/', '/auth/', '/oauth/', '/.well-known/', '/cdn-cgi/'].some((prefix) => url.pathname.startsWith(prefix)) || ['/healthz', '/login', '/security', '/mcp'].includes(url.pathname)) return;
   if (event.request.mode === 'navigate') {
     event.respondWith(fetch(event.request).catch(async () => (await caches.match('/offline.html')) || new Response('Toolbox is offline. Reconnect to view live readings.', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } })));
     return;

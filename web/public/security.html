@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f3f0">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.philipithomas.com" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/auth.css">
+  <script src="/auth.js" defer></script>
+  <title>Sign-in & connections · Toolbox</title>
+</head>
+<body class="auth-page" data-page="security">
+  <header class="auth-header"><a href="/" class="wordmark" aria-label="Toolbox home"><img src="/icons/logo.svg" width="193" height="31" alt="Toolbox"></a><a class="auth-home" href="/">Machine room ↗</a></header>
+  <main class="security-main">
+    <div class="security-intro"><p class="eyebrow">Your account</p><h1>Sign-in & connections.</h1><p class="auth-description">philip@ilic.nyc</p></div>
+    <p id="auth-message" class="auth-message" role="status" aria-live="polite" hidden></p>
+    <p id="auth-error" class="auth-error" role="alert" hidden></p>
+    <noscript><p class="auth-error">Enable JavaScript to sign in to Toolbox.</p></noscript>
+    <section class="security-section" aria-labelledby="passkeys-title">
+      <div class="security-heading"><div><h2 id="passkeys-title">Passkeys</h2><p>Sign in with your device. Email codes remain available.</p></div></div>
+      <ul id="passkey-list" class="security-list" aria-live="polite"><li class="security-empty">Loading passkeys…</li></ul>
+      <form id="add-passkey-form" class="passkey-form"><div><label for="passkey-name">Passkey name</label><input id="passkey-name" name="name" maxlength="80" placeholder="e.g. MacBook or iPhone" autocomplete="off"></div><button id="add-passkey" class="auth-button primary" type="submit" disabled>Add a passkey</button></form>
+      <p class="auth-footnote">Adding or removing a passkey may ask you to sign in again. <a id="reauthenticate" href="/login?next=%2Fsecurity&reauth=1">Sign in again</a></p>
+    </section>
+    <section class="security-section" aria-labelledby="connections-title">
+      <div class="security-heading"><div><h2 id="connections-title">Connected apps</h2><p>Apps you approve can read host status, container information, and recent logs.</p></div></div>
+      <ul id="connection-list" class="security-list" aria-live="polite"><li class="security-empty">Loading connections…</li></ul>
+      <div class="connector-setup"><h3>Connect Claude</h3><p>Add a custom connector in Claude with this address. Choose <strong>Use Claude’s published identity</strong>, or <strong>Register automatically</strong> if that option is unavailable. No client secret is needed. Sign in to Toolbox and approve access.</p><div class="connector-address"><code id="mcp-url">https://toolbox.contraption.co/mcp</code><button id="copy-mcp" class="auth-button" type="button">Copy</button></div><p class="auth-footnote">Access is read only. Connected apps cannot run commands or change containers. Disconnecting here revokes their access.</p></div>
+    </section>
+    <footer class="security-footer"><a href="/">← Back to the machine room</a><button id="security-logout" class="text-button" type="button">Sign out ↗</button></footer>
+  </main>
+</body>
+</html>

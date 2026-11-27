@@ -149,7 +149,7 @@
     clearTimeout(statusTimer); clearTimeout(logTimer);
     clearSensitive();
     overall('Sign in to reconnect', 'warning');
-    notice('Your Cloudflare session has ended. Sign in again to see live readings.', true);
+    notice('Your Toolbox session has ended. Sign in again to see live readings.', true);
   }
   function renderStatus(data) {
     snapshot = data;
@@ -323,7 +323,6 @@
       if (requestEpoch !== epoch) return;
       if (error instanceof SessionError) sessionExpired();
       else {
-        // Access redirects can become a network error before we receive a 401.
         // Clear the previous session's readings even when the cause is unknown.
         clearSensitive();
         overall('Live readings interrupted', 'warning');
@@ -385,7 +384,7 @@
   $('filter-all').addEventListener('click', () => setFilter('all'));
   $('filter-unconfigured').addEventListener('click', () => setFilter('unconfigured'));
   $('refresh').addEventListener('click', () => { refreshStatus(); refreshLogs(); });
-  $('reconnect').addEventListener('click', () => window.location.reload());
+  $('reconnect').addEventListener('click', () => window.location.assign('/login?next=%2F'));
   $('log-source').addEventListener('change', changeLogSource);
   $('pause-logs').addEventListener('click', () => {
     if ($('log-source').disabled) return;
@@ -401,9 +400,24 @@
     setTimeout(() => set('copy-logs', 'Copy'), 2000);
   });
   $('follow-logs').addEventListener('change', () => { if ($('follow-logs').checked) $('log-output').scrollTop = $('log-output').scrollHeight; });
-  $('sign-out').addEventListener('click', () => {
+  $('sign-out').addEventListener('click', async (event) => {
+    event.preventDefault();
     active = false; clearSensitive();
     navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_TOOLBOX_CACHE' });
+    try {
+      const controller = new AbortController();
+      const session = await request('/auth/session', controller);
+      const response = await fetch('/auth/logout', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrf_token }, body: '{}',
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error('Sign out failed');
+      window.location.assign('/login');
+    } catch {
+      overall('Unable to sign out', 'warning');
+      notice('Unable to sign out. Your readings have been cleared. Reconnect and try signing out again.', true);
+    }
   });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { refreshStatus(); refreshLogs(); }
