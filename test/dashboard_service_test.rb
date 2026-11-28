@@ -49,7 +49,7 @@ class DashboardServiceTest < Minitest::Test
     ENV['TOOLBOX_PRODUCTION_REPO_DIR'] = @repo
     ENV.delete('TOOLBOX_REPO_DIR')
     ENV['OP_SERVICE_ACCOUNT_TOKEN'] = 'fixture-secret-that-must-not-enter-plist'
-    @credentials = JSON.generate(secret: 'a' * 64, smtp_host: 'email-smtp.us-east-2.amazonaws.com', smtp_port: 587, smtp_user: 'fixture-user', smtp_password: 'fixture-secret', smtp_from: 'Toolbox <toolbox@ilic.nyc>')
+    @credentials = JSON.generate(secret: 'a' * 64, smtp_host: 'email-smtp.us-east-2.amazonaws.com', smtp_port: 587, smtp_user: 'fixture-user', smtp_password: 'fixture-secret', smtp_from: 'Toolbox <toolbox@contraption.co>')
     @runner = Runner.new
     @health = [nil, REVISION]
     @sleeps = []

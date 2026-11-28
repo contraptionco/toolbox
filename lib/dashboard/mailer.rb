@@ -10,7 +10,7 @@ module Dashboard
   class Mailer
     class DeliveryError < StandardError; end
 
-    def initialize(host:, user:, password:, origin:, port: 587, from: 'Toolbox <toolbox@ilic.nyc>', require_tls: true)
+    def initialize(host:, user:, password:, origin:, port: 587, from: 'Toolbox <toolbox@contraption.co>', require_tls: true)
       @host, @user, @password, @origin = host.to_s, user.to_s, password.to_s, origin.to_s
       @port, @from, @require_tls = Integer(port), from.to_s, require_tls
       raise ArgumentError, 'Invalid sender' if @from.match?(/[\r\n]/) || !@from.match?(/(?:<)?[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9.-]+(?:>)?\z/)

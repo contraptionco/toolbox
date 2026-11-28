@@ -51,7 +51,7 @@ the secret and SMTP placeholders are replaced:
   "smtp_port": 587,
   "smtp_user": "REPLACE_WITH_SES_SMTP_USERNAME",
   "smtp_password": "REPLACE_WITH_SES_SMTP_PASSWORD",
-  "smtp_from": "Toolbox <toolbox@ilic.nyc>"
+  "smtp_from": "Toolbox <toolbox@contraption.co>"
 }
 ```
 
@@ -68,7 +68,7 @@ before retiring the old credential. A dedicated Toolbox SMTP credential would
 remove this coupling and is recommended for a future rotation.
 
 Keep the SMTP credential in the same region as the configured endpoint. Verify
-the `ilic.nyc` sending identity in that region and permit the `toolbox@ilic.nyc`
+the `contraption.co` sending identity in that region and permit the `toolbox@contraption.co`
 sender. If the SES account is in its sandbox, verify the owner
 recipient too. SMTP credentials are regional, and the SMTP password differs from
 an AWS secret access key. The dashboard needs SMTP delivery only; it does not
@@ -77,7 +77,12 @@ need Manual's S3 access or an AWS administration credential.
 
 The production parser accepts SES SMTP endpoints and ports 587 or 465. Port 587
 requires STARTTLS; port 465 uses implicit TLS. Certificate verification stays
-enabled. The sender must be exactly `Toolbox <toolbox@ilic.nyc>`. Emails include
+enabled. Set the sender to exactly `Toolbox <toolbox@contraption.co>`. The previous
+`Toolbox <toolbox@ilic.nyc>` sender remains accepted during migration so deploying
+this code preserves the existing private configuration. After verifying the new
+SES sending identity and deploying this code, update the Toolbox vault CONFIG
+field and verify delivery. The only permitted recipient remains `philip@ilic.nyc`.
+Emails include
 matching HTML and plaintext, the shared Toolbox logo, and Manual's warm layout,
 Söhne typography and prominent code. Clients that block webfonts use fallbacks.
 
