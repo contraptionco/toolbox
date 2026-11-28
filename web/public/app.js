@@ -3,6 +3,9 @@
 // Live data stays in memory. Never write host data, logs, or credentials to storage.
 (() => {
   const $ = (id) => document.getElementById(id);
+  const validCommit = (value) => typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
+  const pageRevision = document.querySelector('meta[name="toolbox-revision"]')?.content;
+  let deploymentReloading = false;
   const number = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
   const fixed = (value, digits = 1) => number(value) ? Number(value).toFixed(digits) : '—';
   const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
@@ -245,7 +248,6 @@
       const type = external ? 'External host' : app.type === 'host' ? 'Host service' : 'Docker';
       const subtitle = external ? (app.description || 'Hosted elsewhere · not checked') : `${type} · ${app.status || 'unknown'}`;
       info.append(element('p', 'app-subtitle', subtitle));
-      const validCommit = (value) => typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
       if (app.revision_evidence === 'image_match' && validCommit(app.running_commit)) {
         const revision = element('p', 'app-subtitle', `Running ${app.running_commit.slice(0, 8)}`);
         revision.title = `Running image matches deployment record: ${app.running_commit}`;
@@ -324,15 +326,28 @@
       else if ($('log-source').value !== old) changeLogSource();
     }
   }
+  function reloadForDeployment(deployment) {
+    const revision = deployment?.dashboard_commit;
+    if (!validCommit(pageRevision) || !validCommit(revision) || pageRevision.toLowerCase() === revision.toLowerCase()) return false;
+    // A checkout update alone does not mean the running service has changed.
+    // Stop polling before navigation so overlapping events cannot reload twice.
+    deploymentReloading = true;
+    active = false;
+    clearTimeout(statusTimer); clearTimeout(logTimer);
+    clearSensitive();
+    window.location.reload();
+    return true;
+  }
   async function refreshStatus() {
     clearTimeout(statusTimer);
-    if (!active || !authenticated || document.hidden || !navigator.onLine || statusRequest) return;
+    if (deploymentReloading || !active || !authenticated || document.hidden || !navigator.onLine || statusRequest) return;
     const requestEpoch = epoch;
     const controller = new AbortController(); statusRequest = controller;
     statusLoading(true);
     try {
       const data = await request('/api/status', controller);
       if (requestEpoch !== epoch) return;
+      if (reloadForDeployment(data.deployment)) return;
       $('connection-notice').hidden = true;
       renderStatus(data);
     } catch (error) {
@@ -360,7 +375,7 @@
   }
   async function refreshLogs() {
     clearTimeout(logTimer);
-    if (!active || !authenticated || paused || document.hidden || !navigator.onLine || logRequest || $('log-source').disabled) return;
+    if (deploymentReloading || !active || !authenticated || paused || document.hidden || !navigator.onLine || logRequest || $('log-source').disabled) return;
     const source = $('log-source').value;
     if (!source) return;
     const requestEpoch = epoch;

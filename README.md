@@ -84,8 +84,10 @@ for the supported client settings and scopes.
 On an iPhone, open the dashboard in Safari, sign in, then use **Share → Add to
 Home Screen**. The web app has its own icons and standalone display. Offline mode
 shows a reconnect message; metrics, logs and authentication responses are never
-saved for offline use. Current metrics refresh every ten seconds and logs every
-five seconds while visible. The dashboard does not retain metric or log history.
+saved for offline use. Current metrics refresh every fifteen seconds and logs every
+five seconds while visible. An open dashboard reloads automatically after a new
+Toolbox dashboard revision starts; ordinary application deployments update the
+service lists without reloading the page. The dashboard does not retain metric or log history.
 A [logging recommendation](docs/dashboard-auth.md#logging-and-retention) covers
 future cross-container search and the limits of a nominal 24-hour retention period.
 

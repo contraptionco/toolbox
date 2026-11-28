@@ -25,6 +25,8 @@ jobs:
           node --check web/public/app.js
           node --check web/public/auth.js
           node --check web/public/sw.js
+      - name: Test dashboard browser behavior
+        run: node --test test/dashboard_browser_test.js
       - name: Check heartbeat syntax
         run: zsh -n heartbeat.sh
       - name: Check Bully Pulpit release and scheduler guards

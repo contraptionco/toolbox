@@ -127,6 +127,37 @@ class DashboardAppTest < Minitest::Test
     assert_empty @collector.log_calls
   end
 
+  def test_dashboard_html_uses_loaded_revision_even_when_checkout_advances
+    template = File.read(File.expand_path('../web/public/index.html', __dir__))
+    File.write(File.join(@public, 'index.html'), template)
+    loaded = 'a' * 40
+    checkout = 'b' * 40
+    @collector.define_singleton_method(:snapshot) { { deployment: { checkout_commit: checkout } } }
+    @app = Dashboard::App.new(collector: @collector, auth_http: @auth_http, oauth: @oauth,
+      origin: 'https://toolbox.example', public_dir: @public, revision: loaded)
+
+    ['/', '/index.html'].each do |path|
+      response = request(path)
+      assert_equal 200, response.status
+      assert_includes response.body, '<meta name="toolbox-revision" content="' + loaded + '">'
+      refute_includes response.body, checkout
+      %w[/app.js /style.css /auth.css].each { |asset| assert_includes response.body, '"' + asset + '?revision=' + loaded + '"' }
+      assert_no_store(response)
+    end
+    assert_equal loaded, JSON.parse(request('/api/status').body).dig('deployment', 'dashboard_commit')
+    assert_includes File.read(File.join(@public, 'index.html')), '<meta name="toolbox-revision" content="">'
+    assert_equal 303, request('/', token: nil).status
+  end
+
+  def test_dashboard_revision_stamp_escapes_html_and_demo_remains_identifiable
+    File.write(File.join(@public, 'index.html'), '<meta name="toolbox-revision" content="">')
+    ['demo', '"<unsafe>'].each do |revision|
+      @app = Dashboard::App.new(collector: @collector, auth_http: @auth_http, oauth: @oauth,
+        origin: 'https://toolbox.example', public_dir: @public, revision: revision)
+      assert_equal '<meta name="toolbox-revision" content="' + CGI.escapeHTML(revision) + '">', request('/').body
+    end
+  end
+
   def test_authentication_outage_fails_closed_without_collecting
     @auth_http.failure = IOError.new('secret diagnostics')
     response = request('/api/status')
