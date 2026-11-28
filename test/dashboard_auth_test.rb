@@ -440,6 +440,27 @@ class DashboardAuthTest < Minitest::Test
     @store.with_db { |db| db.get_first_value('SELECT count FROM auth_limits WHERE key=?', [@auth.digest(key)]) }
   end
 
+  def test_mailer_uses_contraption_sender_in_header_and_envelope
+    delivered = []
+    connection = Object.new
+    connection.define_singleton_method(:send_message) { |*arguments| delivered << arguments }
+    smtp = Struct.new(:open_timeout, :read_timeout, :tls_context, :start_arguments).new
+    smtp.define_singleton_method(:enable_starttls) { |context| self.tls_context = context }
+    smtp.define_singleton_method(:start) do |*arguments, &block|
+      self.start_arguments = arguments
+      block.call(connection)
+    end
+    mail = Dashboard::Mailer.new(host: 'smtp.example', user: 'fixture-user', password: 'fixture-password', origin: 'https://toolbox.example')
+    Net::SMTP.stub(:new, smtp) { assert mail.send_code(email: Dashboard::Auth::EMAIL, code: '123456') }
+    assert_equal 1, delivered.length
+    message, sender, recipient = delivered.first
+    assert_equal 'toolbox@contraption.co', sender
+    assert_equal 'philip@ilic.nyc', recipient
+    assert_includes message, "From: Toolbox <toolbox@contraption.co>\r\n"
+    assert_includes message, "To: philip@ilic.nyc\r\n"
+    assert_equal OpenSSL::SSL::VERIFY_PEER, smtp.tls_context.verify_mode
+  end
+
   def test_mailer_requires_tls_and_renders_multipart_without_header_injection
     assert_raises(ArgumentError) { Dashboard::Mailer.new(host: 'smtp.example', user: 'u', password: 'p', origin: 'https://toolbox.example', require_tls: false) }
     assert_raises(ArgumentError) { Dashboard::Mailer.new(host: 'smtp.example', user: 'u', password: 'p', origin: 'https://toolbox.example', from: "evil\r\nBcc: thief@example.test") }

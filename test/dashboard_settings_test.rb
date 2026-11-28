@@ -5,7 +5,7 @@ require_relative '../lib/dashboard/settings'
 class DashboardSettingsTest < Minitest::Test
   def settings
     { secret: 'a' * 64, smtp_host: 'email-smtp.us-east-2.amazonaws.com', smtp_port: 587,
-      smtp_user: 'fixture-user', smtp_password: 'fixture-password', smtp_from: 'Toolbox <toolbox@ilic.nyc>' }
+      smtp_user: 'fixture-user', smtp_password: 'fixture-password', smtp_from: 'Toolbox <toolbox@contraption.co>' }
   end
 
   def test_private_owned_file_is_required_and_symlinks_fail_closed
@@ -18,6 +18,16 @@ class DashboardSettingsTest < Minitest::Test
       File.chmod(0o600, path)
       File.symlink(path, File.join(dir, 'link'))
       assert_raises(Errno::ELOOP) { Dashboard::Settings.load(File.join(dir, 'link')) }
+    end
+  end
+
+  def test_sender_migration_accepts_only_the_two_exact_configured_identities
+    ['Toolbox <toolbox@contraption.co>', 'Toolbox <toolbox@ilic.nyc>'].each do |sender|
+      assert_equal sender, Dashboard::Settings.parse(JSON.generate(settings.merge(smtp_from: sender)))['smtp_from']
+    end
+    ['toolbox@contraption.co', 'Other <toolbox@contraption.co>', 'Toolbox <other@contraption.co>',
+     "Toolbox <toolbox@contraption.co>\r\nBcc: other@example.test"].each do |sender|
+      assert_raises(ArgumentError) { Dashboard::Settings.parse(JSON.generate(settings.merge(smtp_from: sender))) }
     end
   end
 

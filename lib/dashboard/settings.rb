@@ -6,6 +6,8 @@ module Dashboard
   # token or other applications' environment, into a private runtime file.
   module Settings
     KEYS = %w[secret smtp_host smtp_port smtp_user smtp_password smtp_from].freeze
+    # Keep the previous sender valid while its private configuration is migrated.
+    SENDERS = ['Toolbox <toolbox@contraption.co>', 'Toolbox <toolbox@ilic.nyc>'].freeze
 
     def self.parse(raw)
       raise ArgumentError, 'Invalid dashboard credential configuration' unless raw.is_a?(String) && raw.bytesize <= 16_384
@@ -15,7 +17,7 @@ module Dashboard
         value['smtp_host'].is_a?(String) && value['smtp_host'].match?(/\Aemail-smtp\.[a-z0-9-]+\.amazonaws\.com\z/) &&
         [465, 587].include?(value['smtp_port']) &&
         %w[smtp_user smtp_password].all? { |key| value[key].is_a?(String) && value[key].bytesize.between?(1, 512) && !value[key].match?(/[\r\n\x00]/) } &&
-        value['smtp_from'] == 'Toolbox <toolbox@ilic.nyc>'
+        SENDERS.include?(value['smtp_from'])
       raise ArgumentError, 'Invalid dashboard credential configuration' unless valid
       value
     rescue JSON::ParserError
