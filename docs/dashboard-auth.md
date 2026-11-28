@@ -8,9 +8,14 @@ in production. Record those checks separately during the rollout.
 ## Sign in and add a passkey
 
 The dashboard has one owner: `philip@ilic.nyc`. The email address is enforced on
-the server; there is no registration or invitation endpoint. Email sign-in uses
-a six-digit code that expires after ten minutes and can be redeemed once in the
-browser that requested it. A code allows five incorrect attempts. Requesting a
+the server; there is no registration or invitation endpoint. Production sign-in
+uses saved passkeys. Email sign-in is disabled by default: both sending and
+verifying a code are rejected before mail delivery or authentication-state
+writes, including codes issued before it was disabled. Existing sessions,
+passkeys and approved OAuth connections continue to work.
+
+When explicitly enabled for recovery, email sign-in uses a six-digit code that
+expires after ten minutes and can be redeemed once in the browser that requested it. A code allows five incorrect attempts. Requesting a
 code in one browser does not replace another browser's pending code. Persisted
 request limits apply per client and browser across service restarts; rejected
 client attempts do not spend the larger global request allowance.
@@ -28,14 +33,51 @@ After signing in, open **Sign-in & connections** at `/security`, name the device
 and select **Add a passkey**. The browser handles device confirmation. Passkeys
 require user verification and are bound to `toolbox.contraption.co`; changing the
 hostname requires new passkeys. Adding or removing a passkey requires a sign-in
-within the last fifteen minutes. Removing the final passkey leaves email recovery
-available. Signing out revokes that browser session.
+within the last fifteen minutes. When email sign-in is disabled, the final
+passkey cannot be removed; add and verify another first. Signing out revokes that
+browser session.
 
 Sessions expire after thirty days. Production cookies are Secure, HttpOnly and
 host-only. Browser mutations check the configured origin and a CSRF token.
 Passkey registration and authentication verify the challenge, relying-party ID,
 origin, user presence, user verification and credential counter. No private
 passkey material leaves the authenticator.
+
+## Temporary email recovery
+
+`TOOLBOX_EMAIL_SIGN_IN_ENABLED=true` is the only production opt-in. Unset, `false`
+and all other values disable email sign-in. The browser reads the server's public
+`email_sign_in_enabled` capability and shows email controls only when it is true.
+The synthetic demo enables email by default; set the variable to `false` to test
+the passkey-only screen. No vault schema or credential changes are required.
+
+The heartbeat normalizes this one setting into the dashboard LaunchAgent's
+explicit environment. A changed setting rewrites and reloads **only the
+dashboard** even when its Git revision is unchanged; an unchanged setting and
+revision leave it running. Manual edits to the generated dashboard plist are not
+persistent configuration and are replaced by the next reconciliation.
+
+For persistent recovery across heartbeats, set this variable to the string `true`
+in the **heartbeat LaunchAgent's** `EnvironmentVariables` and reload that job so
+future heartbeat invocations receive it. Keep its other keys and secret values
+unchanged; never print the full plist. Arrange this during maintenance since a
+heartbeat invocation performs the usual application checks. For an immediate
+change without running the complete orchestration, use the normal production
+Ruby and credential-provider environment to reconcile only the dashboard:
+
+```sh
+cd /Users/philip/code/toolbox
+TOOLBOX_EMAIL_SIGN_IN_ENABLED=true ruby -I. -r ./lib/dashboard_service -e 'Core::DashboardService.ensure_running'
+```
+
+The command still requires the verified clean production checkout and existing
+1Password access. A one-off shell setting alone is temporary: the next heartbeat
+without the same setting restores disabled email sign-in. Verify `/auth/session`
+reports `email_sign_in_enabled: true`, recover and test a passkey, then change the
+heartbeat setting to `false` (or remove it), reload that job, and run the same
+dashboard-only command with `TOOLBOX_EMAIL_SIGN_IN_ENABLED=false`. Verify the
+capability is false and passkey sign-in succeeds. Preserve the auth database and
+test a working passkey before initially disabling recovery in production.
 
 ## Credentials and persistent data
 
@@ -108,7 +150,8 @@ code releases and rollbacks. Use SQLite's backup API for a consistent snapshot
 while the service runs, or stop only the dashboard before making a file copy.
 The PostgreSQL backup does not cover this SQLite database. Existing local files
 or a same-host snapshot do not establish off-host backup coverage. Loss of this
-database requires email sign-in, passkey enrollment and connector consent again.
+database requires temporarily enabled email recovery, passkey enrollment and
+connector consent again.
 
 ## Connect Claude
 
@@ -186,9 +229,12 @@ production verification step.
    assuming that `config.yml` is authoritative.
 3. Deploy the verified auth release while Cloudflare Access remains in front of
    Toolbox. Let the heartbeat manage the dashboard's own LaunchAgent and locked
-   gems. Verify `/healthz` reports the intended revision, then verify the actual
-   first-party email sign-in, dashboard, container/log data, logout and anonymous
-   API denial. Test a passkey on the intended owner device.
+   gems. If no tested passkey exists yet, temporarily enable email recovery as
+   above, sign in and enroll a passkey while Access still protects the site. Test
+   the passkey on the intended owner device, then disable email recovery. Verify
+   `/healthz` reports the intended revision, `/auth/session` reports email sign-in
+   disabled, code requests and verification are rejected, and the dashboard,
+   container/log data, logout and anonymous API denial all work.
 4. Remove only Toolbox's reviewed connector-side Access JWT requirement from the
    current remote ingress rule, preserving all unrelated fields and routes. Then
    remove the Toolbox hostname's Access gate. Keep the shared allow policy for
@@ -196,8 +242,9 @@ production verification step.
    Do not introduce an Access bypass or service-token policy for testing.
 5. In a clean browser context, verify anonymous `/` reaches Toolbox sign-in and
    `/api/status` and `/api/logs` return 401. Anonymous `/mcp` must return 401 with
-   OAuth discovery metadata, not host data. Verify owner email delivery, sign-in,
-   passkey sign-in and sign-out through the public hostname after the cutover.
+   OAuth discovery metadata, not host data. Verify passkey sign-in and sign-out
+   through the public hostname after the cutover, and verify email endpoints
+   reject requests even with a valid browser CSRF token.
 6. Connect Claude with the settings above, perform a permitted status/log read,
    then verify a revoked connection is rejected. Keep local tests, remote CI,
    public HTTP checks, browser checks and the real Claude result distinct in the

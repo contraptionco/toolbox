@@ -51,7 +51,7 @@ class DashboardFlowTest < Minitest::Test
     end
     @store = Dashboard::AuthStore.new(path: File.join(@directory, 'private', 'auth.sqlite3'))
     @mailer = Mailer.new
-    auth = Dashboard::Auth.new(store: @store, origin: ORIGIN, secret: 'fixture-only-secret-' * 3, mailer: @mailer)
+    auth = Dashboard::Auth.new(store: @store, origin: ORIGIN, secret: 'fixture-only-secret-' * 3, mailer: @mailer, email_sign_in_enabled: true)
     oauth = Dashboard::OAuth.new(store: @store, origin: ORIGIN)
     app = Dashboard::App.new(collector: Collector.new, auth_http: Dashboard::AuthHTTP.new(auth: auth),
       oauth: oauth, origin: ORIGIN, public_dir: public_dir, revision: DASHBOARD_COMMIT)

@@ -46,7 +46,8 @@ module Dashboard
           set_cookie(response, @browser_cookie, browser, 86400)
         end
         json(response, 200, authenticated: !!identity, csrf_token: identity ? identity[:csrf_token] : @auth.csrf_token(browser),
-             email: identity && identity[:email], passkeys: identity ? @auth.passkeys : [])
+             email: identity && identity[:email], passkeys: identity ? @auth.passkeys : [],
+             email_sign_in_enabled: @auth.email_sign_in_enabled)
         return true
       end
       unless request.request_method == 'POST'

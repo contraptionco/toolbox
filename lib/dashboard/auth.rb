@@ -23,10 +23,11 @@ module Dashboard
         @status = status
       end
     end
-    attr_reader :store, :origin
+    attr_reader :store, :origin, :email_sign_in_enabled
 
-    def initialize(store:, origin:, secret:, mailer:, clock: -> { Time.now }, relying_party: nil)
+    def initialize(store:, origin:, secret:, mailer:, email_sign_in_enabled: false, clock: -> { Time.now }, relying_party: nil)
       @store, @origin, @secret, @mailer, @clock = store, origin.to_s, secret.to_s, mailer, clock
+      @email_sign_in_enabled = email_sign_in_enabled == true
       uri = URI(@origin)
       local = %w[localhost 127.0.0.1 [::1]].include?(uri.host)
       raise ArgumentError, 'Configure an exact HTTPS origin' unless uri.host && !uri.userinfo && ['', '/'].include?(uri.path) && !uri.query && !uri.fragment && (uri.scheme == 'https' || (local && uri.scheme == 'http'))
@@ -83,6 +84,7 @@ module Dashboard
     end
 
     def request_email(email:, browser_token:, client_key: 'direct')
+      require_email_sign_in!
       raise Error.new('Invalid request') unless valid_token?(browser_token) && email.is_a?(String) && email.bytesize <= 254
       public_limit!('email-request', client_key, browser_token, client_limit: 30, browser_limit: 30)
       email = email.strip.downcase
@@ -111,6 +113,7 @@ module Dashboard
     end
 
     def verify_email(email:, code:, browser_token:, client_key: 'direct')
+      require_email_sign_in!
       public_limit!('email-verify', client_key, browser_token, client_limit: 60, browser_limit: 20)
       raise Error, 'That code is invalid or expired. Request a new one.' unless email.is_a?(String) && email.strip.downcase == EMAIL && code.is_a?(String) && code.match?(/\A\d{6}\z/) && valid_token?(browser_token)
       token = @store.with_db do |db|
@@ -205,12 +208,19 @@ module Dashboard
           raise Error.new('Please sign in again.', 401) unless active_session?(db, identity[:session_id])
           db.execute('DELETE FROM auth_passkeys WHERE id=?', [id])
           raise Error.new('Passkey not found.', 404) if db.changes.zero?
+          if !@email_sign_in_enabled && db.get_first_value('SELECT count(*) FROM auth_passkeys').zero?
+            raise Error.new('Add another passkey before removing your last one while email sign-in is disabled.', 409)
+          end
         end
       end
-      true # Email OTP remains available even after deleting the final passkey.
+      true
     end
 
     private
+
+    def require_email_sign_in!
+      raise Error.new('Email sign-in is disabled. Use a saved passkey.', 403) unless @email_sign_in_enabled
+    end
 
     # Admit all counters atomically. Rejected per-client/browser attempts do not
     # spend the global allowance or create more rows. Persisted limits survive

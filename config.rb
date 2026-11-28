@@ -294,11 +294,10 @@ module Config
   # from the Toolbox dashboard, which has its own LaunchAgent lifecycle.
   SYSTEM_SERVICES = []
 
-  # Explicitly released Compose applications, not heartbeat deployments. The
-  # dashboard observes these containers; it never starts, rebuilds or updates
-  # them. The parallel Bully Pulpit release follows a reviewed branch SHA.
+  # Additional Compose containers observed by the dashboard. Their lifecycle
+  # belongs to the reviewed production deployment; the dashboard never starts,
+  # rebuilds or updates them. Retired pilot containers are not expected.
   COMPOSE_APPLICATIONS = [
-    { name: 'bully-pulpit-pilot', containers: ['bully-pulpit', 'bully-pulpit-postgres', 'bully-pulpit-proxy'] },
     { name: 'bully-pulpit-production-companions', containers: ['bully-pulpit-production-proxy', 'bully-pulpit-production-scheduler'] },
     { name: 'bully-pulpit-production-analytics', containers: ['bully-pulpit-production-analytics'], enabled_if: "#{DATA_DIR}/bully-pulpit/analytics" }
   ].freeze

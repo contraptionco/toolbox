@@ -54,7 +54,8 @@ else
   port = Config::DASHBOARD.fetch(:port)
 end
 
-auth = Dashboard::Auth.new(store: store, origin: origin, secret: secret, mailer: mailer)
+auth = Dashboard::Auth.new(store: store, origin: origin, secret: secret, mailer: mailer,
+                           email_sign_in_enabled: Dashboard::Settings.email_sign_in_enabled?(demo: demo))
 auth_http = Dashboard::AuthHTTP.new(auth: auth)
 # Demo exercises the same UI/auth; OAuth keeps its exact HTTPS production resource.
 oauth = Dashboard::OAuth.new(store: store, origin: demo ? 'https://toolbox.contraption.co' : origin)

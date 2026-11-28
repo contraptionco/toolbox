@@ -52,10 +52,34 @@
       throw error;
     } finally { clearTimeout(timer); }
   }
+  function emailSignInEnabled() { return session?.email_sign_in_enabled === true; }
+  function requireEmailSignIn() {
+    if (!emailSignInEnabled()) throw new Error('Email sign-in is disabled. Use a saved passkey.');
+  }
+  function passkeyUnavailable() {
+    return emailSignInEnabled()
+      ? 'Passkeys are unavailable in this browser. Use an email code to sign in.'
+      : 'Passkeys are unavailable in this browser. Try a browser or device with a saved passkey.';
+  }
+  function renderSignInOptions() {
+    if (page !== 'login') return;
+    const enabled = emailSignInEnabled();
+    $('login-email-option').hidden = !enabled;
+    $('send-code').disabled = !enabled;
+    $('login-description').textContent = enabled ? 'Use an email code, or a passkey you have already saved.' : 'Use a saved passkey to sign in.';
+    $('login-passkey').classList.toggle('primary', !enabled);
+    if (!enabled && !$('login-code-step').hidden) {
+      $('login-code-step').hidden = true;
+      $('login-email-step').hidden = false;
+      $('login-title').textContent = 'Sign in to Toolbox.';
+      $('code').value = '';
+    }
+  }
   async function refreshSession() {
     session = await api('/auth/session');
     csrf = session.csrf_token || '';
     if (!csrf) throw new Error('Unable to start a secure session. Please reload this page.');
+    renderSignInOptions();
     return session;
   }
   async function attempt(action, message) {
@@ -72,7 +96,8 @@
     } catch (error) {
       const canceled = error.name === 'NotAllowedError' || error.name === 'AbortError';
       const unavailable = error.name === 'NotSupportedError' || error.name === 'SecurityError';
-      showMessage(canceled ? 'The passkey request was canceled or timed out. You can try again or use an email code.' : unavailable ? 'Passkeys are unavailable in this browser. Use an email code to sign in.' : (error.message || 'Unable to continue. Please try again.'), true);
+      const canceledMessage = 'The passkey request was canceled or timed out. Try again.' + (emailSignInEnabled() ? ' You can also use an email code.' : '');
+      showMessage(canceled ? canceledMessage : unavailable ? passkeyUnavailable() : (error.message || 'Unable to continue. Please try again.'), true);
     } finally {
       pending = false;
       buttons.forEach((button, index) => { if (button.isConnected) button.disabled = disabled[index]; });
@@ -106,7 +131,7 @@
       response, clientExtensionResults: credential.getClientExtensionResults(), authenticatorAttachment: credential.authenticatorAttachment };
   }
   function requirePasskeys() {
-    if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('This browser does not support passkeys. Use an email code to sign in.');
+    if (!window.PublicKeyCredential || !navigator.credentials) throw new Error(passkeyUnavailable());
   }
   async function addPasskey(name) {
     requirePasskeys();
@@ -127,6 +152,7 @@
     } else window.location.assign(nextPath());
   }
   async function sendCode() {
+    requireEmailSignIn();
     await api('/auth/email', { email });
     $('login-email-step').hidden = true;
     $('login-passkey-step').hidden = true;
@@ -139,7 +165,7 @@
     $('email-form').addEventListener('submit', (event) => { event.preventDefault(); void attempt(sendCode); });
     $('code-form').addEventListener('submit', (event) => {
       event.preventDefault();
-      void attempt(async () => { await api('/auth/verify', { email, code: $('code').value.trim() }); await finishLogin(true); });
+      void attempt(async () => { requireEmailSignIn(); await api('/auth/verify', { email, code: $('code').value.trim() }); await finishLogin(true); });
     });
     $('resend-code').addEventListener('click', () => { void attempt(sendCode, 'A new code has been sent. Use the most recent email.'); });
     $('back-to-email').addEventListener('click', () => {
@@ -185,8 +211,13 @@
       const remove = element('button', 'auth-button', 'Remove');
       remove.type = 'button';
       remove.setAttribute('aria-label', 'Remove ' + (key.name || 'passkey'));
+      const lastRequiredKey = !emailSignInEnabled() && keys.length === 1;
+      remove.disabled = lastRequiredKey;
+      if (lastRequiredKey) details.append(element('span', 'security-item-detail', 'Add another passkey before removing this one.'));
       remove.addEventListener('click', () => {
-        if (!window.confirm('Remove this passkey? You can still sign in with an email code.')) return;
+        if (lastRequiredKey) return;
+        const message = emailSignInEnabled() ? 'Remove this passkey? You can still sign in with an email code.' : 'Remove this passkey? Use another saved passkey to sign in.';
+        if (!window.confirm(message)) return;
         void attempt(async () => { await api('/auth/passkey/delete', { id: key.id }); await refreshSession(); renderPasskeys(); }, 'Passkey removed.');
       });
       row.append(details, remove);
@@ -248,7 +279,6 @@
       await refreshSession();
       if (page === 'login') {
         if (session.authenticated && params.get('reauth') !== '1') { window.location.replace(nextPath()); return; }
-        $('send-code').disabled = false;
         $('login-passkey').disabled = false;
       } else {
         if (!session.authenticated) { requestLogin(); return; }

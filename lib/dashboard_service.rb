@@ -23,8 +23,10 @@ module Core
 
     def initialize(repo_dir: File.expand_path('..', __dir__), home_dir: Config::HOME_DIR,
                    runner: Core::CommandRunner, health_reader: nil, sleeper: ->(seconds) { sleep(seconds) },
-                   uid: Process.uid, ruby: RbConfig.ruby, credential_reader: nil)
+                   uid: Process.uid, ruby: RbConfig.ruby, credential_reader: nil,
+                   email_sign_in_enabled: Dashboard::Settings.email_sign_in_enabled?)
       @repo, @home, @runner, @sleeper, @uid, @ruby = repo_dir, home_dir, runner, sleeper, uid, ruby
+      @email_sign_in_enabled = email_sign_in_enabled == true
       @runtime = File.join(@repo, '.runtime', 'dashboard')
       @credential_reader = credential_reader || -> { Core::OnePassword.get_json_field(Config::DASHBOARD.fetch(:auth_item), Config::DASHBOARD.fetch(:auth_field)) }
       @health_reader = health_reader || method(:health)
@@ -35,29 +37,43 @@ module Core
       Core::ProductionGuard.verify_checkout!(@repo, command_runner: @runner)
       revision = capture!('git', 'rev-parse', 'HEAD').strip
       raise 'Invalid dashboard revision' unless revision.match?(/\A[0-9a-f]{40}\z/)
-      return true if @health_reader.call == revision
+      path = File.join(@home, 'Library', 'LaunchAgents', "#{LABEL}.plist")
+      content = plist
+      previous = File.file?(path) ? File.binread(path) : nil
+      changed = previous != content
+      # A recovery toggle changes the managed environment even at the same SHA.
+      return true if @health_reader.call == revision && !changed
 
       FileUtils.mkdir_p(@runtime, mode: 0o700)
       provision_authentication
       install_dependencies
-      path = File.join(@home, 'Library', 'LaunchAgents', "#{LABEL}.plist")
-      content = plist
-      changed = !File.file?(path) || File.binread(path) != content
-      if changed
-        FileUtils.mkdir_p(File.dirname(path))
-        atomic_write(path, content)
-        # A missing agent is expected on first install. Never stop other labels.
-        capture('launchctl', 'bootout', "gui/#{@uid}/#{LABEL}")
-        capture!('launchctl', 'bootstrap', "gui/#{@uid}", path)
-      else
-        _out, _err, status = capture('launchctl', 'kickstart', '-k', "gui/#{@uid}/#{LABEL}")
-        capture!('launchctl', 'bootstrap', "gui/#{@uid}", path) unless status.success?
+      written = false
+      begin
+        if changed
+          FileUtils.mkdir_p(File.dirname(path))
+          atomic_write(path, content)
+          written = true
+          # A missing agent is expected on first install. Never stop other labels.
+          capture('launchctl', 'bootout', "gui/#{@uid}/#{LABEL}")
+          capture!('launchctl', 'bootstrap', "gui/#{@uid}", path)
+        else
+          _out, _err, status = capture('launchctl', 'kickstart', '-k', "gui/#{@uid}/#{LABEL}")
+          capture!('launchctl', 'bootstrap', "gui/#{@uid}", path) unless status.success?
+        end
+        20.times do
+          return true if @health_reader.call == revision
+          @sleeper.call(0.5)
+        end
+        raise 'Dashboard did not become ready on loopback'
+      rescue StandardError
+        # A failed reload can leave the old process healthy at this same SHA.
+        # Restore the prior desired state so the next heartbeat retries the
+        # environment change instead of mistaking the new file for loaded config.
+        if written
+          previous ? atomic_write(path, previous) : File.delete(path)
+        end
+        raise
       end
-      20.times do
-        return true if @health_reader.call == revision
-        @sleeper.call(0.5)
-      end
-      raise 'Dashboard did not become ready on loopback'
     end
 
     def plist
@@ -66,7 +82,8 @@ module Core
         'HOME' => @home,
         'PATH' => "#{File.dirname(@ruby)}:#{@home}/.asdf/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         'LANG' => 'en_US.UTF-8',
-        'TOOLBOX_PRODUCTION_REPO_DIR' => @repo
+        'TOOLBOX_PRODUCTION_REPO_DIR' => @repo,
+        'TOOLBOX_EMAIL_SIGN_IN_ENABLED' => @email_sign_in_enabled ? 'true' : 'false'
       )
       entries = environment.map { |key, value| "<key>#{escape.call(key)}</key><string>#{escape.call(value)}</string>" }.join("\n")
       <<~XML

@@ -5,7 +5,7 @@ Toolbox deploys the reviewed `main` branch to a dedicated checkout at
 remote release, rejects dirty or unexpected branches, and builds an immutable
 archive of that commit. `/Users/philip/code/bully-pulpit` remains a development
 checkout. Production runtime files live under `/Users/philip/data/bully-pulpit`.
-The old pilot runtime and its separate PostgreSQL container remain untouched.
+The old pilot containers are retired; their runtime files and data remain preserved.
 
 The new Compose project contains `bully-pulpit-production`, a one-shot migration
 container, `bully-pulpit-production-proxy`, and `bully-pulpit-production-scheduler`.
@@ -150,7 +150,17 @@ tags. For application rollback, pause automatic updates and restore the previous
 record's Compose wrapper and exact image without restoring an older database.
 The migration contract remains additive. Do not re-enable cloud writers against
 a stale database after local writes begin; a reverse data migration is a separate
-operation. Never use `down -v` or delete the old pilot while validating this move.
+operation. Never use `down -v` to perform a release or rollback.
+
+## Legacy pilot retirement
+
+The legacy containers `bully-pulpit`, `bully-pulpit-postgres`, and
+`bully-pulpit-proxy` are retired from the dashboard configuration and must not be
+recreated. The heartbeat no longer manages any of those names. Remove only an
+exact, confirmed-stopped pilot container, without volume removal or image pruning.
+Preserve all pilot runtime files, data, volumes, images, and development checkouts.
+The managed `postgres`, Postcard, production Bully Pulpit app/proxy/scheduler and
+analytics containers, and one-shot migration containers are outside this retirement.
 
 ## Scheduled work
 

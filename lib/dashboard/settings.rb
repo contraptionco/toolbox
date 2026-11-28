@@ -5,6 +5,11 @@ module Dashboard
   # The heartbeat writes only this dashboard's credentials, never its own vault
   # token or other applications' environment, into a private runtime file.
   module Settings
+    # Recovery is opt-in. A nonempty value alone never enables email sign-in.
+    def self.email_sign_in_enabled?(environment = ENV, demo: false)
+      environment.fetch('TOOLBOX_EMAIL_SIGN_IN_ENABLED', demo ? 'true' : 'false') == 'true'
+    end
+
     KEYS = %w[secret smtp_host smtp_port smtp_user smtp_password smtp_from].freeze
     # Keep the previous sender valid while its private configuration is migrated.
     SENDERS = ['Toolbox <toolbox@contraption.co>', 'Toolbox <toolbox@ilic.nyc>'].freeze
