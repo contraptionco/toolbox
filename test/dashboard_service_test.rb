@@ -125,6 +125,18 @@ class DashboardServiceTest < Minitest::Test
     assert_equal [['launchctl', 'kickstart', '-k', "gui/501/#{Core::DashboardService::LABEL}"]], launch_commands
   end
 
+  def test_healthy_previous_revision_restarts_once_and_waits_for_current_commit
+    write_matching_plist
+    @health = ['b' * 40, 'b' * 40, REVISION]
+    assert @service.ensure_running
+    assert_equal [['launchctl', 'kickstart', '-k', "gui/501/#{Core::DashboardService::LABEL}"]], launch_commands
+    assert_equal [0.5], @sleeps
+    @runner.calls.clear
+    assert @service.ensure_running
+    assert_empty launch_commands
+    assert @runner.calls.all? { |arguments, _options| arguments.first == 'git' }
+  end
+
   def test_unloaded_existing_plist_falls_back_to_dashboard_bootstrap
     write_matching_plist
     @runner.kickstart_success = false

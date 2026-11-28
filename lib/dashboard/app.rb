@@ -1,4 +1,5 @@
 require 'json'
+require 'cgi'
 require 'time'
 require 'thread'
 require 'uri'
@@ -260,6 +261,17 @@ module Dashboard
       response['Content-Type'] = mime
       response['Service-Worker-Allowed'] = '/' if path == '/sw.js'
       response.body = File.binread(file)
+      if path == '/index.html'
+        # Use the loaded process revision, not a checkout that may already have
+        # advanced while the heartbeat is preparing the dashboard restart.
+        response.body = response.body.sub('<meta name="toolbox-revision" content="">',
+          '<meta name="toolbox-revision" content="' + CGI.escapeHTML(@revision.to_s) + '">')
+        # Queried assets bypass the service worker's offline cache, preventing
+        # fresh HTML from being paired with an older cached script or stylesheet.
+        %w[/app.js /style.css /auth.css].each do |asset|
+          response.body = response.body.sub('"' + asset + '"', '"' + asset + '?revision=' + URI.encode_www_form_component(@revision.to_s) + '"')
+        end
+      end
     rescue Errno::ENOENT, Errno::ENOTDIR
       json(response, 404, error: 'Not found')
     end
