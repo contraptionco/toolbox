@@ -45,8 +45,8 @@ class DashboardAuthTest < Minitest::Test
     FileUtils.remove_entry(@directory)
   end
 
-  def make_auth
-    Dashboard::Auth.new(store: @store, origin: 'https://toolbox.example', secret: 'fixture-secret-' * 4, mailer: @mail, clock: -> { @clock })
+  def make_auth(email_sign_in_enabled: true)
+    Dashboard::Auth.new(store: @store, origin: 'https://toolbox.example', secret: 'fixture-secret-' * 4, mailer: @mail, email_sign_in_enabled: email_sign_in_enabled, clock: -> { @clock })
   end
 
   def login
@@ -66,6 +66,60 @@ class DashboardAuthTest < Minitest::Test
   def assertion(client, handle, **options)
     request = @auth.authentication_options(browser_token: @browser)
     client.get(challenge: request[:challenge], user_handle: WebAuthn.standard_encoder.decode(handle), user_verified: true, **options)
+  end
+
+  def test_email_sign_in_defaults_disabled
+    auth = Dashboard::Auth.new(store: @store, origin: 'https://toolbox.example', secret: 'fixture-secret-' * 4, mailer: @mail)
+    refute auth.email_sign_in_enabled
+    error = assert_raises(Dashboard::Auth::Error) { auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser) }
+    assert_equal 403, error.status
+    assert_empty @mail.messages
+  end
+
+  def test_disabled_email_endpoints_cannot_send_write_or_accept_a_previously_issued_code
+    @auth.request_email(email: Dashboard::Auth::EMAIL, browser_token: @browser)
+    code = @mail.messages.last[:code]
+    @auth = make_auth(email_sign_in_enabled: false)
+    @http = Dashboard::AuthHTTP.new(auth: @auth)
+    assert_equal false, JSON.parse(http('/auth/session', method: 'GET').body).fetch('email_sign_in_enabled')
+    headers = {'cookie' => "__Host-toolbox_browser=#{@browser}", 'x-csrf-token' => @auth.csrf_token(@browser)}
+    changes = @store.with_db { |db| db.get_first_value('SELECT total_changes()') }
+    3.times do
+      ['/auth/email', '/auth/verify'].each do |path|
+        response = http(path, data: {email: Dashboard::Auth::EMAIL, code: code}, headers: headers)
+        assert_equal 403, response.status
+        assert_equal 'Email sign-in is disabled. Use a saved passkey.', JSON.parse(response.body)['error']
+        assert_empty response.cookies
+      end
+    end
+    assert_equal 1, @mail.messages.length
+    @store.with_db do |db|
+      assert_equal changes, db.get_first_value('SELECT total_changes()')
+      assert_equal 1, db.get_first_value('SELECT count(*) FROM auth_login')
+      assert_equal 0, db.get_first_value('SELECT count(*) FROM auth_sessions')
+    end
+  end
+
+  def test_disabling_email_preserves_sessions_and_passkey_login_but_protects_last_key
+    client, identity, handle, credential = enroll
+    @auth = make_auth(email_sign_in_enabled: false)
+    @http = Dashboard::AuthHTTP.new(auth: @auth)
+    @auth.require_recent!(identity) # Existing sessions still authorize security management.
+    response = assertion(client, handle)
+    token = @auth.authenticate_passkey(browser_token: @browser, response: response)
+    assert_equal Dashboard::Auth::EMAIL, @auth.session(token)[:email]
+    bootstrap = http('/auth/session', method: 'GET', headers: {'cookie' => "__Host-toolbox_session=#{token}"})
+    assert_equal true, JSON.parse(bootstrap.body).fetch('authenticated')
+    assert_equal false, JSON.parse(bootstrap.body).fetch('email_sign_in_enabled')
+    error = assert_raises(Dashboard::Auth::Error) { @auth.delete_passkey(identity: identity, id: credential['id']) }
+    assert_equal 409, error.status
+    assert_equal [credential['id']], @auth.passkeys.map { |key| key[:id] }
+
+    options = @auth.registration_options(browser_token: @browser, identity: identity)
+    second = WebAuthn::FakeClient.new('https://toolbox.example').create(challenge: options[:challenge], user_verified: true)
+    assert @auth.register_passkey(browser_token: @browser, identity: identity, response: second, name: 'Second key')
+    assert @auth.delete_passkey(identity: identity, id: credential['id'])
+    assert_equal [second['id']], @auth.passkeys.map { |key| key[:id] }
   end
 
   def test_only_fixed_email_can_receive_or_verify_codes
@@ -198,6 +252,7 @@ class DashboardAuthTest < Minitest::Test
     response = http('/auth/session', method: 'GET')
     assert_equal 200, response.status
     assert_equal false, JSON.parse(response.body)['authenticated']
+    assert_equal true, JSON.parse(response.body).fetch('email_sign_in_enabled')
     cookie = response.cookies.first.to_s
     assert_includes cookie, '__Host-toolbox_browser='
     assert_includes cookie, 'HttpOnly'

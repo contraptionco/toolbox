@@ -11,12 +11,13 @@ class DashboardServiceTest < Minitest::Test
 
   class Runner
     attr_reader :calls
-    attr_accessor :bundle_installed, :kickstart_success, :bootstrap_success
+    attr_accessor :bundle_installed, :kickstart_success, :bootstrap_success, :bootout_success
     def initialize
       @calls = []
       @bundle_installed = true
       @kickstart_success = true
       @bootstrap_success = true
+      @bootout_success = true
     end
 
     def capture3(*arguments, **options)
@@ -33,6 +34,8 @@ class DashboardServiceTest < Minitest::Test
                   kickstart_success
                 elsif arguments[0, 2] == ['launchctl', 'bootstrap']
                   bootstrap_success
+                elsif arguments[0, 2] == ['launchctl', 'bootout']
+                  bootout_success
                 else
                   true
                 end
@@ -45,9 +48,10 @@ class DashboardServiceTest < Minitest::Test
     @repo = File.join(@directory, 'production')
     @home = File.join(@directory, 'home')
     FileUtils.mkdir_p([@repo, @home])
-    @saved_env = %w[TOOLBOX_PRODUCTION_REPO_DIR TOOLBOX_REPO_DIR OP_SERVICE_ACCOUNT_TOKEN].to_h { |key| [key, ENV[key]] }
+    @saved_env = %w[TOOLBOX_PRODUCTION_REPO_DIR TOOLBOX_REPO_DIR OP_SERVICE_ACCOUNT_TOKEN TOOLBOX_EMAIL_SIGN_IN_ENABLED].to_h { |key| [key, ENV[key]] }
     ENV['TOOLBOX_PRODUCTION_REPO_DIR'] = @repo
     ENV.delete('TOOLBOX_REPO_DIR')
+    ENV.delete('TOOLBOX_EMAIL_SIGN_IN_ENABLED')
     ENV['OP_SERVICE_ACCOUNT_TOKEN'] = 'fixture-secret-that-must-not-enter-plist'
     @credentials = JSON.generate(secret: 'a' * 64, smtp_host: 'email-smtp.us-east-2.amazonaws.com', smtp_port: 587, smtp_user: 'fixture-user', smtp_password: 'fixture-secret', smtp_from: 'Toolbox <toolbox@contraption.co>')
     @runner = Runner.new
@@ -71,10 +75,11 @@ class DashboardServiceTest < Minitest::Test
   end
 
   def test_matching_revision_is_idempotent_without_process_or_dependency_changes
+    write_matching_plist
     @health = [REVISION]
     assert @service.ensure_running
     assert @runner.calls.all? { |arguments, _options| arguments.first == 'git' }
-    refute File.exist?(plist_path)
+    assert File.exist?(plist_path)
     assert_empty @sleeps
   end
 
@@ -94,7 +99,7 @@ class DashboardServiceTest < Minitest::Test
     plist = @service.plist
     environment = plist.match(%r{<key>EnvironmentVariables</key><dict>(.*?)</dict>}m)[1]
     names = environment.scan(%r{<key>(.*?)</key>}).flatten
-    assert_equal %w[BUNDLE_GEMFILE BUNDLE_PATH BUNDLE_APP_CONFIG BUNDLE_WITHOUT BUNDLE_FROZEN HOME PATH LANG TOOLBOX_PRODUCTION_REPO_DIR].sort,
+    assert_equal %w[BUNDLE_GEMFILE BUNDLE_PATH BUNDLE_APP_CONFIG BUNDLE_WITHOUT BUNDLE_FROZEN HOME PATH LANG TOOLBOX_PRODUCTION_REPO_DIR TOOLBOX_EMAIL_SIGN_IN_ENABLED].sort,
                  names.sort
     refute_includes plist, 'OP_SERVICE_ACCOUNT_TOKEN'
     refute_includes plist, ENV.fetch('OP_SERVICE_ACCOUNT_TOKEN')
@@ -135,6 +140,49 @@ class DashboardServiceTest < Minitest::Test
     assert @service.ensure_running
     assert_empty launch_commands
     assert @runner.calls.all? { |arguments, _options| arguments.first == 'git' }
+  end
+
+  def test_email_recovery_toggle_reloads_only_dashboard_even_at_the_same_revision
+    write_matching_plist
+    @health = [REVISION]
+    enabled = service(email_sign_in_enabled: true)
+    assert enabled.ensure_running
+    assert_includes File.read(plist_path), '<key>TOOLBOX_EMAIL_SIGN_IN_ENABLED</key><string>true</string>'
+    assert_equal [
+      ['launchctl', 'bootout', "gui/501/#{Core::DashboardService::LABEL}"],
+      ['launchctl', 'bootstrap', 'gui/501', plist_path]
+    ], launch_commands
+    refute @runner.calls.any? { |arguments, _| arguments.first == 'docker' }
+    @runner.calls.clear
+    assert enabled.ensure_running
+    assert @runner.calls.all? { |arguments, _| arguments.first == 'git' }
+    assert_empty launch_commands
+
+    assert @service.ensure_running
+    assert_includes File.read(plist_path), '<key>TOOLBOX_EMAIL_SIGN_IN_ENABLED</key><string>false</string>'
+    assert_equal 2, launch_commands.length
+  end
+
+  def test_failed_same_revision_toggle_restores_old_plist_and_retries
+    write_matching_plist
+    previous = service(email_sign_in_enabled: true).plist
+    File.write(plist_path, previous)
+    @health = [REVISION] # The previous process remains healthy at this SHA.
+    @runner.bootout_success = false
+    @runner.bootstrap_success = false
+    assert_raises(RuntimeError) { @service.ensure_running }
+    assert_equal previous, File.read(plist_path)
+    assert_equal 2, launch_commands.length
+
+    @runner.calls.clear
+    @runner.bootout_success = true
+    @runner.bootstrap_success = true
+    assert @service.ensure_running
+    assert_equal [
+      ['launchctl', 'bootout', "gui/501/#{Core::DashboardService::LABEL}"],
+      ['launchctl', 'bootstrap', 'gui/501', plist_path]
+    ], launch_commands
+    assert_equal @service.plist, File.read(plist_path)
   end
 
   def test_unloaded_existing_plist_falls_back_to_dashboard_bootstrap
@@ -205,8 +253,8 @@ class DashboardServiceTest < Minitest::Test
 
   private
 
-  def service(repo_dir: @repo)
-    Core::DashboardService.new(repo_dir: repo_dir, home_dir: @home, runner: @runner,
+  def service(repo_dir: @repo, email_sign_in_enabled: false)
+    Core::DashboardService.new(repo_dir: repo_dir, home_dir: @home, runner: @runner, email_sign_in_enabled: email_sign_in_enabled,
       uid: 501, ruby: '/fixture/ruby/bin/ruby', sleeper: ->(seconds) { @sleeps << seconds },
       health_reader: -> { @health.length > 1 ? @health.shift : @health.first },
       credential_reader: -> { @credentials.is_a?(Exception) ? raise(@credentials) : @credentials })

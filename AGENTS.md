@@ -15,8 +15,10 @@ checkout `/Users/philip/code/bully-pulpit-production`, runtime directory
 uses app-owned databases inside the existing managed `postgres` container.
 Merging configuration alone does not enable it: the final verified cloud-copy
 record, explicit enable marker, and separate primary activation marker gate
-rollout. Preserve the old pilot runtime and `bully-pulpit-postgres` until explicit
-retirement. The production app/proxy/scheduler use distinct container names.
+rollout. The legacy pilot containers `bully-pulpit`, `bully-pulpit-postgres`, and
+`bully-pulpit-proxy` are retired; do not recreate them. Preserve the old pilot's
+runtime files, data, volumes, images, and development checkouts. The production
+app/proxy/scheduler use distinct container names.
 Keep the public normalized Workflow deny, private runtime secrets, exact release
 image records, and durable cron attempt ledger. Follow the deployment README for
 cutover and rollback; never restore an old database to undo an image deployment.
@@ -86,7 +88,12 @@ LaunchAgent state, which can contain secrets.
   changes. Dashboard failures are reported without skipping other app checks.
   Its LaunchAgent receives an explicit environment without deployment secrets.
   Only its private mail configuration is read from disk by the web process.
-- Email OTP and passkeys allow only `philip@ilic.nyc`. The dashboard reads its
+- Passkeys allow only `philip@ilic.nyc`. Email sign-in is disabled by default;
+  only `TOOLBOX_EMAIL_SIGN_IN_ENABLED=true` enables recovery. The heartbeat
+  propagates this boolean to the dashboard LaunchAgent and reconciles changes
+  even at the same revision. Preserve and test a working passkey before disabling
+  recovery; the final key cannot be deleted while email sign-in is disabled.
+  The dashboard reads its
   private config from `.runtime/dashboard/auth-config.json`, provisioned from the
   `Toolbox Dashboard` 1Password item. Persistent auth state lives in
   `~/data/toolbox-dashboard/auth.sqlite3`; preserve it through releases/rollbacks.

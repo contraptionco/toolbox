@@ -39,7 +39,7 @@ This toolbox is built with the following principles in mind:
 - **Lock screen on boot**: Secure your server with automatic screen locking after reboot
 - **Complex Git Service Management**: Supports services requiring initial setup scripts and managed via their own Docker Compose.
 - **Private dashboard**: Native host metrics, deployment status, Docker inventory,
-  container metrics and redacted live logs with owner-only email/passkey sign-in.
+  container metrics and redacted live logs with owner-only passkey sign-in.
 - **Private MCP connector**: Read host status, containers and bounded logs from Claude
   with scoped, revocable OAuth access.
 
@@ -60,9 +60,11 @@ PostgreSQL database are not dependencies of the UI. Netdata and its scheduled
 log rotation are retired; the dashboard reads host metrics directly. Existing
 Netdata files and metric history are preserved.
 
-Toolbox owns its sign-in. Only `philip@ilic.nyc` can receive a one-time email
-code; no other accounts can register. After signing in, open **Sign-in &
-connections** to add a passkey. Email remains available for recovery. Sessions,
+Toolbox owns its sign-in. Only `philip@ilic.nyc` can sign in, using a saved
+passkey; no other accounts can register. **Sign-in & connections** manages
+passkeys. Email sign-in is disabled by default; an explicit
+`TOOLBOX_EMAIL_SIGN_IN_ENABLED=true` setting enables temporary owner-only recovery
+as documented in the [auth guide](docs/dashboard-auth.md#temporary-email-recovery). Sessions,
 passkeys and OAuth grants live in a private SQLite database outside the checkout.
 The dashboard still uses Cloudflare Tunnel for HTTPS routing. Removing the
 previous Cloudflare Access gate is a separate production cutover, described in
@@ -363,8 +365,9 @@ separate app deployment checkout plus two databases in the existing PostgreSQL
 container. It remains disabled until the final verified cloud copy is explicitly
 enabled; primary scheduled work has a separate activation gate. See
 [the deployment runbook](deployments/bully-pulpit/README.md) for credentials,
-copy verification, rollout, durable scheduling and rollback. Keep the old pilot
-and its database intact during migration.
+copy verification, rollout, durable scheduling and rollback. The legacy pilot
+containers are retired. Preserve their runtime files, data, volumes, images and
+development checkouts; retirement does not authorize deleting that history.
 
 ### PostgreSQL backups, including Manual
 

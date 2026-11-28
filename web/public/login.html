@@ -20,14 +20,16 @@
       <p class="eyebrow">Your private machine room</p>
       <h1 id="login-title">Sign in to Toolbox.</h1>
       <div id="login-email-step">
-        <p class="auth-description">Use an email code, or a passkey you have already saved.</p>
-        <form id="email-form">
-          <label for="email">Email address</label>
-          <input id="email" name="email" type="email" value="philip@ilic.nyc" autocomplete="username webauthn" readonly required>
-          <button id="send-code" class="auth-button primary wide" type="submit" disabled>Send a sign-in code <span aria-hidden="true">↗</span></button>
-        </form>
-        <div class="auth-divider"><span>or</span></div>
-        <button id="login-passkey" class="auth-button wide" type="button" disabled>Sign in with a passkey</button>
+        <p id="login-description" class="auth-description">Use a saved passkey to sign in.</p>
+        <div id="login-email-option" hidden>
+          <form id="email-form">
+            <label for="email">Email address</label>
+            <input id="email" name="email" type="email" value="philip@ilic.nyc" autocomplete="username webauthn" readonly required>
+            <button id="send-code" class="auth-button primary wide" type="submit" disabled>Send a sign-in code <span aria-hidden="true">↗</span></button>
+          </form>
+          <div class="auth-divider"><span>or</span></div>
+        </div>
+        <button id="login-passkey" class="auth-button primary wide" type="button" disabled>Sign in with a passkey</button>
       </div>
       <div id="login-code-step" hidden>
         <p class="auth-description">Enter the six-digit code sent to <strong>philip@ilic.nyc</strong>.</p>
@@ -42,7 +44,7 @@
         <p class="auth-description">You’re signed in. Save a passkey to use Touch ID, Face ID, or your device’s screen lock next time.</p>
         <button id="setup-passkey" class="auth-button primary wide" type="button">Save a passkey <span aria-hidden="true">↗</span></button>
         <button id="skip-passkey" class="auth-button wide" type="button">Continue for now</button>
-        <p class="auth-footnote">You can always sign in with an email code.</p>
+        <p class="auth-footnote">Manage your saved passkeys from Sign-in &amp; connections.</p>
       </div>
     <p id="auth-message" class="auth-message" role="status" aria-live="polite" hidden></p>
     <p id="auth-error" class="auth-error" role="alert" hidden></p>

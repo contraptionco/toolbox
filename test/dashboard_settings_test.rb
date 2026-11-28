@@ -3,6 +3,16 @@ require 'tmpdir'
 require_relative '../lib/dashboard/settings'
 
 class DashboardSettingsTest < Minitest::Test
+  def test_email_sign_in_requires_an_explicit_true_environment_setting
+    refute Dashboard::Settings.email_sign_in_enabled?({})
+    assert Dashboard::Settings.email_sign_in_enabled?({'TOOLBOX_EMAIL_SIGN_IN_ENABLED' => 'true'})
+    ['', 'false', 'TRUE', '1', 'yes', ' true ', nil].each do |value|
+      refute Dashboard::Settings.email_sign_in_enabled?({'TOOLBOX_EMAIL_SIGN_IN_ENABLED' => value})
+    end
+    assert Dashboard::Settings.email_sign_in_enabled?({}, demo: true)
+    refute Dashboard::Settings.email_sign_in_enabled?({'TOOLBOX_EMAIL_SIGN_IN_ENABLED' => 'false'}, demo: true)
+  end
+
   def settings
     { secret: 'a' * 64, smtp_host: 'email-smtp.us-east-2.amazonaws.com', smtp_port: 587,
       smtp_user: 'fixture-user', smtp_password: 'fixture-password', smtp_from: 'Toolbox <toolbox@contraption.co>' }
